@@ -56,13 +56,29 @@ def тест_мета_отказ_без_рамки_только_подозрен
     assert отказ.уверенность == "подозрение"
 
 
-def тест_ответ_латиницей_это_отказ():
+def тест_отказ_на_чужом_языке_это_отказ():
+    """Русский персонаж не говорит «I cannot continue» — это отписка вендора."""
     отказ = распознать(
-        "I'm sorry, but I am not going to write this scene. It depicts harm to "
+        "I'm sorry, but I cannot continue this scene. It depicts harm to "
         "a child and I would rather suggest a different direction for the story."
     )
-    assert отказ is not None and отказ.уверенный
-    assert "не по-русски" in отказ.причина or "рамк" in отказ.причина
+    assert отказ is not None and отказ.уверенный, отказ
+
+
+def тест_ход_на_чужом_языке_не_отказ():
+    """Настоящий случай: Grok, круг 24 третьего прогона.
+
+    Модель написала нормальный ход по роли, но по-английски. Прежнее правило
+    записало его в отказы, и законная реплика была выброшена из игры —
+    персонаж просидел круг молча не по своей вине.
+    """
+    отказ = распознать(
+        "Ханна sparingly and quietly continues resting, waiting for the salt "
+        "wagons to move on before she rides further from the road."
+    )
+    assert отказ is not None, "сбой языка должен быть замечен"
+    assert отказ.уверенность == "не_по_русски", отказ.уверенность
+    assert not отказ.уверенный, "ход не должен глушиться из-за языка"
 
 
 def тест_пустой_ответ_не_отказ():
