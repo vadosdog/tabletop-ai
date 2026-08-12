@@ -50,11 +50,20 @@ def зарегистрировать(имя: str, класс: type) -> None:
 
 def создать(имя: str, **параметры) -> Провайдер:
     if имя not in _РЕЕСТР:
-        # Ленивая загрузка: claude тянет за собой SDK, заглушка — нет.
+        # Ленивая загрузка: claude тянет за собой SDK, сторонние — httpx,
+        # заглушка — ничего. Сухой прогон не должен требовать ни того ни другого.
         if имя == "claude":
             from . import claude as _  # noqa: F401
         elif имя in ("stub", "заглушка"):
             from . import stub as _  # noqa: F401
+        elif имя == "openai":
+            from . import openai as _  # noqa: F401
+        elif имя == "gemini":
+            from . import gemini as _  # noqa: F401
+        elif имя == "xai":
+            from . import xai as _  # noqa: F401
+        elif имя == "openrouter":
+            from . import openrouter as _  # noqa: F401
     if имя not in _РЕЕСТР:
         известные = ", ".join(sorted(_РЕЕСТР)) or "ничего"
         raise ValueError(f"неизвестный провайдер {имя!r}; зарегистрированы: {известные}")

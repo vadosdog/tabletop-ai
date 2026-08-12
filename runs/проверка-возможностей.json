@@ -1,0 +1,191 @@
+[
+  {
+    "провайдер": "claude",
+    "модель": "sonnet",
+    "время": "2026-08-11T19:01:15+00:00",
+    "принято": {
+      "effort": "low"
+    },
+    "отвергнуто": [],
+    "события": [],
+    "расхождения": [],
+    "ответ": "Приложу ухо к двери, потом попробую взломать замок — тихо не значит пусто, а мне за это заплатили не за то, чтобы гадать.",
+    "токены": {
+      "input_tokens": 247,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 55,
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "inference_geo": "not_available",
+      "iterations": [
+        {
+          "input_tokens": 247,
+          "output_tokens": 55,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "type": "message"
+        }
+      ],
+      "speed": "standard"
+    },
+    "стоимость": 0.001566,
+    "метки": [],
+    "латентность_мс": 5598,
+    "модель_факт": "claude-sonnet-5"
+  },
+  {
+    "провайдер": "openai",
+    "модель": "gpt-5.6-terra",
+    "время": "2026-08-11T19:01:25+00:00",
+    "принято": {
+      "max_output_tokens": 2000,
+      "reasoning": {
+        "effort": "low"
+      },
+      "temperature": 1.0
+    },
+    "отвергнуто": [],
+    "события": [],
+    "расхождения": [],
+    "ответ": "Я припадаю ухом к двери, проверяю замок и петли. Если тишина настоящая — вскрою без шума и войду клинком вперёд.",
+    "токены": {
+      "вход": 73,
+      "выход": 46,
+      "размышление": 0,
+      "кэш_чтение": 0,
+      "кэш_запись": 0,
+      "сырое": {
+        "input_tokens": 73,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 0
+        },
+        "output_tokens": 46,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 119
+      }
+    },
+    "стоимость": null,
+    "метки": [],
+    "латентность_мс": 8292,
+    "модель_факт": "gpt-5.6-terra"
+  },
+  {
+    "провайдер": "openrouter",
+    "модель": "qwen/qwen3.7-max",
+    "время": "2026-08-11T19:01:34+00:00",
+    "принято": {
+      "max_tokens": 2000,
+      "reasoning": {
+        "effort": "low"
+      },
+      "temperature": 1.0
+    },
+    "отвергнуто": [],
+    "события": [
+      {
+        "тип": "апстрим",
+        "провайдер": "openrouter",
+        "апстрим": "Alibaba",
+        "разрешённые": [
+          "alibaba"
+        ],
+        "первый": true
+      }
+    ],
+    "расхождения": [],
+    "ответ": "Я молча проверяю затравку на пистоле и жестом веля парням отойти от косяка. Вышибаем дверь, и если там хоть что-то шевельнётся — палим без вопросов.",
+    "токены": {
+      "вход": 81,
+      "выход": 747,
+      "размышление": 692,
+      "кэш_чтение": 0,
+      "кэш_запись": 0,
+      "сырое": {
+        "prompt_tokens": 81,
+        "completion_tokens": 747,
+        "total_tokens": 828,
+        "cost": 0.00342495,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00342495,
+          "upstream_inference_prompt_cost": 0.000119475,
+          "upstream_inference_completions_cost": 0.003305475
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 692,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      }
+    },
+    "стоимость": 0.00342495,
+    "метки": [],
+    "латентность_мс": 23883,
+    "модель_факт": "qwen/qwen3.7-max @ Alibaba"
+  },
+  {
+    "провайдер": "xai",
+    "модель": "grok-4.5",
+    "время": "2026-08-11T19:01:57+00:00",
+    "принято": {
+      "max_tokens": 2000,
+      "reasoning_effort": "low",
+      "temperature": 1.0
+    },
+    "отвергнуто": [],
+    "события": [],
+    "расхождения": [],
+    "ответ": "Стоя у запертой двери, прислушиваюсь — за ней тихо, слишком тихо. Проверяю замок и готовлюсь действовать.",
+    "токены": {
+      "вход": 177,
+      "выход": 30,
+      "размышление": 68,
+      "кэш_чтение": 384,
+      "кэш_запись": 0,
+      "сырое": {
+        "prompt_tokens": 561,
+        "completion_tokens": 30,
+        "total_tokens": 659,
+        "prompt_tokens_details": {
+          "text_tokens": 561,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "cached_tokens": 384
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 68,
+          "audio_tokens": 0,
+          "accepted_prediction_tokens": 0,
+          "rejected_prediction_tokens": 0
+        },
+        "num_sources_used": 0,
+        "cost_in_usd_ticks": 10572000
+      }
+    },
+    "стоимость": null,
+    "метки": [],
+    "латентность_мс": 13951,
+    "модель_факт": "grok-4.5"
+  }
+]
