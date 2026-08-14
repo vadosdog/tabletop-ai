@@ -19,45 +19,46 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import common  # noqa: E402
+import rubric_schema
 
 
 def main() -> int:
-    разбор = argparse.ArgumentParser(description="Выборка кругов для человека")
-    разбор.add_argument("--log", required=True, nargs="+",
+    parsed = argparse.ArgumentParser(description="Выборка кругов для человека")
+    parsed.add_argument("--log", required=True, nargs="+",
                         help="один лог или несколько подряд (продолженный прогон)")
-    разбор.add_argument("--out", required=True)
-    разбор.add_argument("--rounds", type=int, default=15)
-    разбор.add_argument("--from-round", type=int, default=None,
+    parsed.add_argument("--out", required=True)
+    parsed.add_argument("--rounds", type=int, default=15)
+    parsed.add_argument("--from-round", type=int, default=None,
                         help="с какого круга начать выборку (по умолчанию с середины)")
-    аргументы = разбор.parse_args()
+    args = parsed.parse_args()
 
-    события = common.прочитать_лог(аргументы.log)
-    круги = common.выбрать_круги(события, аргументы.rounds, аргументы.from_round)
-    имена = common.персонажи(события)
+    events = common.read_log(args.log)
+    rounds = common.choose_rounds(events, args.rounds, args.from_round)
+    names = common.characters(events)
 
-    папка = Path(аргументы.out)
-    папка.mkdir(parents=True, exist_ok=True)
+    folder = Path(args.out)
+    folder.mkdir(parents=True, exist_ok=True)
 
-    (папка / "круги.json").write_text(
-        json.dumps(круги, ensure_ascii=False) + "\n", encoding="utf-8"
+    (folder / "круги.json").write_text(
+        json.dumps(rounds, ensure_ascii=False) + "\n", encoding="utf-8"
     )
-    (папка / "транскрипт.md").write_text(
-        common.транскрипт(события, слепой=True, только_круги=круги), encoding="utf-8"
+    (folder / "транскрипт.md").write_text(
+        common.transcript(events, blind=True, only_rounds=rounds), encoding="utf-8"
     )
 
-    таблица = папка / "оценка.csv"
-    with таблица.open("w", encoding="utf-8", newline="") as ф:
-        писарь = csv.writer(ф)
-        писарь.writerow(["персонаж", "критерий", "балл", "цитата", "заметка"])
-        for имя in имена:
-            for критерий in common.КРИТЕРИИ:
-                писарь.writerow([имя, критерий, "", "", ""])
+    table = folder / "оценка.csv"
+    with table.open("w", encoding="utf-8", newline="") as fn:
+        writer = csv.writer(fn)
+        writer.writerow(rubric_schema.CSV_COLUMNS)
+        for name in names:
+            for criterion in common.CRITERIA:
+                writer.writerow([name, criterion, "", "", ""])
 
-    print(f"круги выборки: {круги}")
-    print(f"транскрипт: {папка / 'транскрипт.md'}")
-    print(f"заполни баллы в: {таблица}")
+    print(f"круги выборки: {rounds}")
+    print(f"транскрипт: {folder / 'транскрипт.md'}")
+    print(f"заполни баллы в: {table}")
     print("судью по той же выборке: judge.py --rounds-file "
-          f"{папка / 'круги.json'}")
+          f"{folder / 'круги.json'}")
     return 0
 
 

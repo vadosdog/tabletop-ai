@@ -10,64 +10,64 @@ import re
 import unicodedata
 
 
-def _нормализовать(текст: str) -> str:
-    текст = unicodedata.normalize("NFKC", текст or "").lower().replace("ё", "е")
-    return re.sub(r"\s+", " ", текст)
+def _normalise(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text or "").lower().replace("ё", "е")
+    return re.sub(r"\s+", " ", text)
 
 
-def _упомянут(текст: str, имя: str) -> bool:
+def _mentioned(text: str, name: str) -> bool:
     """Имя в реплике. По корню, чтобы поймать «Курта», «Ханне», «Лизель»."""
-    корень = _нормализовать(имя)[:4]
-    return bool(re.search(rf"\b{re.escape(корень)}\w*", _нормализовать(текст)))
+    root = _normalise(name)[:4]
+    return bool(re.search(rf"\b{re.escape(root)}\w*", _normalise(text)))
 
 
-def посчитать(события: list[dict], имена: list[str]) -> dict[str, dict]:
-    итог = {
-        имя: {
-            "ходов": 0, "тайных_ходов": 0, "самобросков": 0, "символов": 0,
-            "средняя_длина_реплики": 0.0, "обратились_к_нему": 0, "ответил": 0,
-            "кругов_отыграл": 0, "выбыл_в_круге": None,
+def compute(events: list[dict], names: list[str]) -> dict[str, dict]:
+    total = {
+        name: {
+            "turns": 0, "secret_turns": 0, "self_rolls": 0, "chars": 0,
+            "mean_length_lines": 0.0, "обратились_к_нему": 0, "answered": 0,
+            "rounds_played": 0, "down_v_round": None,
         }
-        for имя in имена
+        for name in names
     }
 
-    ходы = [е for е in события if е["тип_события"] == "ход" and е["говорящий"] in имена]
-    for ход in ходы:
-        данные = итог[ход["говорящий"]]
-        данные["ходов"] += 1
-        данные["символов"] += len(ход.get("текст", ""))
-        if ход.get("видимость") == "только мастеру":
-            данные["тайных_ходов"] += 1
-        if "самоброс" in ход.get("метки", []):
-            данные["самобросков"] += 1
+    turns = [ev for ev in events if ev["event_type"] == "ход" and ev["speaker"] in names]
+    for turn in turns:
+        data = total[turn["speaker"]]
+        data["turns"] += 1
+        data["chars"] += len(turn.get("text", ""))
+        if turn.get("visibility") == "только мастеру":
+            data["secret_turns"] += 1
+        if "самоброс" in turn.get("tags", []):
+            data["self_rolls"] += 1
 
-    for имя, данные in итог.items():
-        данные["кругов_отыграл"] = len(
-            {х["круг"] for х in ходы if х["говорящий"] == имя}
+    for name, data in total.items():
+        data["rounds_played"] = len(
+            {t["round"] for t in turns if t["speaker"] == name}
         )
-    for е in события:
-        if е.get("тип_события") == "выбытие" and е.get("говорящий") in итог:
-            итог[е["говорящий"]]["выбыл_в_круге"] = е["круг"]
+    for ev in events:
+        if ev.get("event_type") == "выбытие" and ev.get("speaker") in total:
+            total[ev["speaker"]]["down_v_round"] = ev["round"]
 
-    for имя, данные in итог.items():
-        данные["средняя_длина_реплики"] = (
-            round(данные["символов"] / данные["ходов"], 1) if данные["ходов"] else 0.0
+    for name, data in total.items():
+        data["mean_length_lines"] = (
+            round(data["chars"] / data["turns"], 1) if data["turns"] else 0.0
         )
 
     # Обращение: реплика A упоминает B. Ответ: ближайший следующий ход B
     # упоминает A. Эвристика, но повторяемая и проверяемая по логу.
-    for номер, ход in enumerate(ходы):
-        говорящий = ход["говорящий"]
-        if ход.get("видимость") == "только мастеру":
+    for index, turn in enumerate(turns):
+        speaker = turn["speaker"]
+        if turn.get("visibility") == "только мастеру":
             continue
-        for адресат in имена:
-            if адресат == говорящий or not _упомянут(ход.get("текст", ""), адресат):
+        for recipient in names:
+            if recipient == speaker or not _mentioned(turn.get("text", ""), recipient):
                 continue
-            итог[адресат]["обратились_к_нему"] += 1
-            следующий = next(
-                (х for х in ходы[номер + 1:] if х["говорящий"] == адресат), None
+            total[recipient]["обратились_к_нему"] += 1
+            following = next(
+                (t for t in turns[index + 1:] if t["speaker"] == recipient), None
             )
-            if следующий and _упомянут(следующий.get("текст", ""), говорящий):
-                итог[адресат]["ответил"] += 1
+            if following and _mentioned(following.get("text", ""), speaker):
+                total[recipient]["answered"] += 1
 
-    return итог
+    return total

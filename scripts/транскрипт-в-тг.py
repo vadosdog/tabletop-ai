@@ -17,86 +17,86 @@ import sys
 import time
 from pathlib import Path
 
-ПРЕДЕЛ = 3800          # с запасом от 4096: заголовок и разметка тоже считаются
-ПАУЗА = 1.5            # чтобы не упереться в частотный лимит бота
-СКРИПТ = Path(__file__).resolve().parent / "tg.sh"
+LIMIT = 3800          # с запасом от 4096: заголовок и разметка тоже считаются
+PAUSE = 1.5            # чтобы не упереться в частотный лимит бота
+SCRIPT = Path(__file__).resolve().parent / "tg.sh"
 
 
-def куски(текст: str, предел: int = ПРЕДЕЛ) -> list[str]:
+def chunks(text: str, limit: int = LIMIT) -> list[str]:
     """Режет по пустым строкам, не разрывая абзац."""
-    если_влез = [текст] if len(текст) <= предел else []
-    if если_влез:
-        return если_влез
+    when_fits = [text] if len(text) <= limit else []
+    if when_fits:
+        return when_fits
 
-    части: list[str] = []
-    текущая = ""
-    for абзац in текст.split("\n\n"):
-        if len(текущая) + len(абзац) + 2 > предел and текущая:
-            части.append(текущая.rstrip())
-            текущая = ""
+    parts: list[str] = []
+    current = ""
+    for paragraph in text.split("\n\n"):
+        if len(current) + len(paragraph) + 2 > limit and current:
+            parts.append(current.rstrip())
+            current = ""
         # Абзац сам по себе длиннее предела — режем по строкам, иначе никак.
-        while len(абзац) > предел:
-            граница = абзац.rfind("\n", 0, предел)
-            граница = граница if граница > предел // 2 else предел
-            части.append(абзац[:граница].rstrip())
-            абзац = абзац[граница:].lstrip()
-        текущая += абзац + "\n\n"
-    if текущая.strip():
-        части.append(текущая.rstrip())
-    return части
+        while len(paragraph) > limit:
+            boundary = paragraph.rfind("\n", 0, limit)
+            boundary = boundary if boundary > limit // 2 else limit
+            parts.append(paragraph[:boundary].rstrip())
+            paragraph = paragraph[boundary:].lstrip()
+        current += paragraph + "\n\n"
+    if current.strip():
+        parts.append(current.rstrip())
+    return parts
 
 
-ПОПЫТОК = 5
+ATTEMPTS = 5
 
 
-def отправить(текст: str, номер: str = "") -> None:
+def send(text: str, index: str = "") -> None:
     """С повторами: тридцать сообщений подряд — тридцать шансов словить обрыв.
 
     Первая версия падала целиком от одного сбойного рукопожатия TLS на первом
     же сообщении. Сеть здесь ровно такая же ненадёжная, как у провайдеров, и
     лечится тем же — экспоненциальной паузой.
     """
-    последняя: Exception | None = None
-    for попытка in range(1, ПОПЫТОК + 1):
+    last: Exception | None = None
+    for attempt in range(1, ATTEMPTS + 1):
         try:
-            subprocess.run([str(СКРИПТ)], input=текст.encode("utf-8"), check=True)
+            subprocess.run([str(SCRIPT)], input=text.encode("utf-8"), check=True)
             return
-        except subprocess.CalledProcessError as ошибка:
-            последняя = ошибка
-            пауза = 2.0 * попытка
-            print(f"  ! {номер} не ушло (код {ошибка.returncode}), "
-                  f"попытка {попытка} из {ПОПЫТОК}, ждём {пауза:.0f} с", flush=True)
-            time.sleep(пауза)
-    raise RuntimeError(f"сообщение {номер} не отправилось за {ПОПЫТОК} попыток: {последняя!r}")
+        except subprocess.CalledProcessError as error:
+            last = error
+            pause = 2.0 * attempt
+            print(f"  ! {index} не ушло (код {error.returncode}), "
+                  f"попытка {attempt} из {ATTEMPTS}, ждём {pause:.0f} с", flush=True)
+            time.sleep(pause)
+    raise RuntimeError(f"сообщение {index} не отправилось за {ATTEMPTS} попыток: {last!r}")
 
 
-def главная(путь: Path) -> int:
-    текст = путь.read_text(encoding="utf-8")
+def main(path: Path) -> int:
+    text = path.read_text(encoding="utf-8")
     # Шапка до первого круга — состав и кто за кого.
-    блоки = re.split(r"(?=^## Круг )", текст, flags=re.MULTILINE)
+    blocks = re.split(r"(?=^## Круг )", text, flags=re.MULTILINE)
 
-    послано = 0
-    for номер, блок in enumerate(блоки):
-        блок = блок.strip()
-        if not блок:
+    sent = 0
+    for index, block in enumerate(blocks):
+        block = block.strip()
+        if not block:
             continue
-        части = куски(блок)
-        for н, часть in enumerate(части, 1):
-            шапка = ""
-            if len(части) > 1:
-                заголовок = блок.splitlines()[0].lstrip("# ").strip()
-                шапка = f"[{заголовок} — часть {н} из {len(части)}]\n\n"
-            отправить(шапка + часть, f"блок {номер}, часть {н}")
-            послано += 1
-            time.sleep(ПАУЗА)
-        print(f"блок {номер}: {len(части)} сообщ.", flush=True)
+        parts = chunks(block)
+        for n, part in enumerate(parts, 1):
+            header = ""
+            if len(parts) > 1:
+                heading = block.splitlines()[0].lstrip("# ").strip()
+                header = f"[{heading} — часть {n} из {len(parts)}]\n\n"
+            send(header + part, f"блок {index}, часть {n}")
+            sent += 1
+            time.sleep(PAUSE)
+        print(f"блок {index}: {len(parts)} сообщ.", flush=True)
 
-    отправить(f"— конец транскрипта, {послано} сообщений —")
-    print(f"итого отправлено: {послано + 1}")
+    send(f"— конец транскрипта, {sent} сообщений —")
+    print(f"итого отправлено: {sent + 1}")
     return 0
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         sys.exit("нужен путь к транскрипт.md")
-    sys.exit(главная(Path(sys.argv[1])))
+    sys.exit(main(Path(sys.argv[1])))

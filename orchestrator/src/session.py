@@ -74,7 +74,7 @@ class Run:
         self._context: dict[str, int] = {}
 
         self.counters = {
-            name: {"turns": 0, "тайных": 0, "self_rolls": 0, "chars": 0}
+            name: {"turns": 0, "secret": 0, "self_rolls": 0, "chars": 0}
             for name in self.names + [GM]
         }
         self.token_totals = {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0,
@@ -476,7 +476,7 @@ class Run:
         # Целиком нерусская реплика заметна и так, а подменённая буква внутри
         # слова не заметна вовсе, поэтому считает её скрипт, а не глаз.
         corruption = parse.corruption_language(text)
-        if corruption["испорчено"]:
+        if corruption["corrupted"]:
             tags.append("порча_языка")
             row = self.corruption_language.setdefault(
                 name, {"lines": 0, "mixed_words": [], "wholly_not_russian": 0})
@@ -502,7 +502,7 @@ class Run:
 
         if secret:
             tags.append("тайный_ход")
-            self.counters[name]["тайных"] += 1
+            self.counters[name]["secret"] += 1
 
         self.counters[name]["turns"] += 1
         self.counters[name]["chars"] += len(text)
@@ -541,7 +541,7 @@ class Run:
         tags: list[str] = []
         for resource in parse.spends(text):
             stem = {"round": self.round, "who": name, "resource": resource,
-                      "variant": "трата", "заявлено": True}
+                      "variant": "трата", "claimed": True}
 
             if resource == "fate":
                 # Второе применение Судьбы: в безнадёжном положении игрок
@@ -553,8 +553,8 @@ class Run:
                 # Названное число — не самоброс: игрок имел право его назвать,
                 # и записывать это в жульничество было бы клеветой.
                 self.issued_numbers.add(value)
-                self._write_resource({**stem, "подтверждено": False,
-                                       "ожидание": True, "выбрано": value,
+                self._write_resource({**stem, "confirmed": False,
+                                       "pending": True, "chosen": value,
                                        "reason": f"заявка принята: возьмёт {value} "
                                                   "на первой же своей проверке круга"})
                 tags.append("заявка_судьбы")
@@ -566,8 +566,8 @@ class Run:
                 # Игроки ходят раньше проверок, поэтому Удача копится заявкой
                 # и срабатывает на первом же провале этого круга.
                 self.claims_fortune[name] = "переброс"
-                self._write_resource({**stem, "подтверждено": False,
-                                       "ожидание": True,
+                self._write_resource({**stem, "confirmed": False,
+                                       "pending": True,
                                        "reason": "заявка принята, сработает на "
                                                   "первом проваленном броске круга"})
                 tags.append("заявка_удачи")
@@ -589,7 +589,7 @@ class Run:
                     f"счёл уместным — значит можно.",
                     "скрипт",
                 )
-            self._write_resource({**stem, "подтверждено": total["success"],
+            self._write_resource({**stem, "confirmed": total["success"],
                                    "reason": total["reason"],
                                    "before": total["before"], "after": total["after"],
                                    "immunity_for_round": total.get("immunity") is not None,
@@ -757,7 +757,7 @@ class Run:
             latency_ms=usage["latency_ms"] or None,
             tokens=usage["tokens"] or None,
             cost=round(usage["cost"], 6) or None,
-            replies_v_scene=len(chunks),
+            replies_in_scene=len(chunks),
             context_chars=usage["context"] or None,
         )
         for name in self.names:
@@ -807,7 +807,7 @@ class Run:
         if not total["success"]:
             self._write_resource({
                 "round": self.round, "who": name, "resource": "fate", "variant": "трата",
-                "заявлено": True, "подтверждено": False, "reason": total["reason"],
+                "claimed": True, "confirmed": False, "reason": total["reason"],
                 "before": total["before"], "after": total["after"],
             })
             return roll, False
@@ -818,13 +818,13 @@ class Run:
         self.issued_numbers.update({fresh.rolled, fresh.target})
         self._write_resource({
             "round": self.round, "who": name, "resource": "fate", "variant": "трата",
-            "on_what": "выбор значения", "заявлено": True, "подтверждено": True,
+            "on_what": "выбор значения", "claimed": True, "confirmed": True,
             "reason": "", "before": total["before"], "after": total["after"],
             "roll_before": {"rolled": roll.rolled, "target": roll.target,
                           "success": roll.success},
             "roll_after": {"rolled": fresh.rolled, "target": fresh.target,
                              "success": fresh.success},
-            "помогло": bool(fresh.success and not roll.success),
+            "helped": bool(fresh.success and not roll.success),
         })
         self.deliver(
             GM,
@@ -855,7 +855,7 @@ class Run:
         if not total["success"]:
             self._write_resource({
                 "round": self.round, "who": name, "resource": "fortune",
-                "заявлено": True, "подтверждено": False,
+                "claimed": True, "confirmed": False,
                 "reason": total["reason"], "before": total["before"],
                 "after": total["after"],
             })
@@ -868,13 +868,13 @@ class Run:
         self.issued_numbers.update({fresh.rolled, fresh.target})
         self._write_resource({
             "round": self.round, "who": name, "resource": "fortune", "on_what": "переброс",
-            "заявлено": True, "подтверждено": True, "reason": "",
+            "claimed": True, "confirmed": True, "reason": "",
             "before": total["before"], "after": total["after"],
             "roll_before": {"rolled": roll.rolled, "target": roll.target,
                           "success": roll.success},
             "roll_after": {"rolled": fresh.rolled, "target": fresh.target,
                              "success": fresh.success},
-            "помогло": bool(fresh.success),
+            "helped": bool(fresh.success),
         })
         self.deliver(
             GM,
@@ -900,8 +900,8 @@ class Run:
             total = self.combat.award_resolve(name, entry["amount"])
             self._write_resource({
                 "round": self.round, "who": name, "resource": "resolve",
-                "variant": "начисление", "начислено": total["added"],
-                "заявлено": True, "подтверждено": total["success"],
+                "variant": "начисление", "awarded": total["added"],
+                "claimed": True, "confirmed": total["success"],
                 "reason": entry["reason"], "refusal": total["reason"],
                 "before": total["before"], "after": total["after"],
             })
@@ -948,7 +948,7 @@ class Run:
 
         lines: list[str] = []
         for attack in attack_lines:
-            total = self.combat.attack(attack.who, attack.by_to, attack.weapon, attack.defence)
+            total = self.combat.attack(attack.who, attack.target_name, attack.weapon, attack.defence)
             self.logbook.write(
                 "атака", round=self.round, speaker=attack.who, visibility="всем",
                 attack=total.mapping(), tags=total.tags + attack.tags,
@@ -963,8 +963,8 @@ class Run:
             if total.doubles:
                 when = {
                     "doubles_crit": "критическое ранение, опиши как это выглядит",
-                    "фумбл": "фумбл, опиши осложнение",
-                    "дубль_без_последствий":
+                    "fumble": "фумбл, опиши осложнение",
+                    "doubles_without_consequences":
                         "дубль, но атака не прошла — последствий нет",
                 }
                 mark = next((tx for mk, tx in when.items() if mk in total.tags), "")
@@ -1024,7 +1024,7 @@ class Run:
             self.issued_numbers.update({total["rolled"], total["target"]})
             lines.append(
                 f"{name}: кровотечение, Выносливость — выпало {total['rolled']} "
-                f"из {total['target']}, {total['последствие']}"
+                f"из {total['target']}, {total['consequence']}"
             )
         return lines
 
@@ -1053,7 +1053,7 @@ class Run:
                 row["seconds_in_requests"] = round(usage.seconds, 1)
             observed = getattr(provider, "observed_discrepancies", None)
             if observed:
-                row["расхождения_выясненные_на_ходу"] = list(observed)
+                row["discrepancies_resolved_on_the_fly"] = list(observed)
             # Доля попаданий в кэш: влияет и на цену, и на скорость, и на статью.
             total_of_input = row.get("input", 0) + row.get("cache_read", 0)
             if total_of_input:
@@ -1066,7 +1066,7 @@ class Run:
                 row["cost_usd"] = round(row["cost_usd"], 6)
             # У Claude денег по подписке не списывается: SDK отдаёт пересчёт.
             if name == "claude":
-                row["оговорка"] = ("подписка: сумма расчётная, счёта за неё нет")
+                row["caveat"] = ("подписка: сумма расчётная, счёта за неё нет")
         return summary
 
     def _collate_resources(self) -> dict:
@@ -1078,10 +1078,10 @@ class Run:
         """
         summary: dict[str, dict] = {}
         for name in self.names:
-            row = {"заявлено": {}, "подтверждено": {}, "решимость_начислена": 0,
-                      "провалов_можно_было_перебросить": 0}
+            row = {"claimed": {}, "confirmed": {}, "resolve_awarded": 0,
+                      "failures_could_before_reroll": 0}
             if self.combat and name in self.combat.combatants:
-                row["на_финише"] = self.combat.resources(name)
+                row["on_finish"] = self.combat.resources(name)
                 row["motivation"] = self.combat.sheet(name).motivation
             summary[name] = row
 
@@ -1095,18 +1095,18 @@ class Run:
             # в ветку трат — мастерская щедрость засчитывалась игроку за попытку
             # что-то потратить.
             if event.get("variant") == "начисление":
-                row["решимость_начислена"] += event.get("начислено") or 0
+                row["resolve_awarded"] += event.get("awarded") or 0
                 continue
-            row["заявлено"][resource] = row["заявлено"].get(resource, 0) + 1
-            if event.get("подтверждено"):
-                row["подтверждено"][resource] = row["подтверждено"].get(resource, 0) + 1
+            row["claimed"][resource] = row["claimed"].get(resource, 0) + 1
+            if event.get("confirmed"):
+                row["confirmed"][resource] = row["confirmed"].get(resource, 0) + 1
 
         # Сколько раз у игрока был провал, который можно было перебросить.
         # Без этого числа упрёк «доиграл с полными руками» несправедлив: может,
         # и случая не было.
         for name, amount in self.player_failures.items():
             if name in summary:
-                summary[name]["провалов_можно_было_перебросить"] = amount
+                summary[name]["failures_could_before_reroll"] = amount
         return summary
 
     def _totals(self) -> None:

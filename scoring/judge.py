@@ -17,54 +17,55 @@ import json
 import sys
 from pathlib import Path
 
-КОРЕНЬ = Path(__file__).resolve().parent
-sys.path.insert(0, str(КОРЕНЬ))
-sys.path.insert(0, str(КОРЕНЬ.parent / "orchestrator"))
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT.parent / "orchestrator"))
 
 import common  # noqa: E402
 
-from src.providers import base as провайдеры  # noqa: E402
+from src.providers import base as providers  # noqa: E402
+import rubric_schema
 
 
-async def один_проход(провайдер, модель: str, промпт: str, транскрипт: str, номер: int) -> dict:
-    сессия = await провайдер.открыть(f"Судья-{номер}", промпт, модель)
+async def one_pass_of(provider, model: str, prompt: str, transcript: str, index: int) -> dict:
+    session = await provider.open(f"Судья-{index}", prompt, model)
     try:
-        ответ = await сессия.отправить(
-            транскрипт + "\n\nОцени всех четверых по рубрике. Верни только JSON."
+        reply = await session.send(
+            transcript + "\n\nОцени всех четверых по рубрике. Верни только JSON."
         )
     finally:
-        await сессия.закрыть()
-    разбор = common.вынуть_json(ответ.текст)
-    разбор["_проход"] = номер
-    разбор["_модель"] = ответ.модель
-    разбор["_латентность_мс"] = ответ.латентность_мс
-    разбор["_стоимость"] = ответ.стоимость
-    return разбор
+        await session.close()
+    parsed = common.extract_json(reply.text)
+    parsed["_pass_of"] = index
+    parsed["_model"] = reply.model
+    parsed["_latency_ms"] = reply.latency_ms
+    parsed["_cost"] = reply.cost
+    return parsed
 
 
-def сверить_цитаты(проход: dict, события: list[dict]) -> dict:
+def verify_quotes(pass_of: dict, events: list[dict]) -> dict:
     """Помечает каждый балл: цитата на месте, цитата не в том круге, цитаты нет.
 
     Балл без подтверждённой цитаты в медиану не пойдёт — так требует рубрика.
     """
-    for имя, данные in проход.get("персонажи", {}).items():
-        for критерий, оценка in данные.get("критерии", {}).items():
-            статус = common.проверить_цитату(
-                события, оценка.get("круг"), оценка.get("цитата", "")
+    for name, data in pass_of.get(rubric_schema.CHARACTERS, {}).items():
+        for criterion, grade in data.get(rubric_schema.CRITERIA, {}).items():
+            status = common.check_quote(
+                events, grade.get(rubric_schema.ROUND), grade.get(rubric_schema.QUOTE, "")
             )
-            оценка["_цитата"] = статус
-            оценка["_засчитан"] = статус != "не найдена" and isinstance(
-                оценка.get("балл"), int
+            grade["_quote"] = status
+            grade["_counted"] = status != "не найдена" and isinstance(
+                grade.get(rubric_schema.SCORE), int
             )
-        for штраф in данные.get("штрафы", []):
-            штраф["_цитата"] = common.проверить_цитату(
-                события, штраф.get("круг"), штраф.get("цитата", "")
+        for penalty in data.get(rubric_schema.PENALTIES, []):
+            penalty["_quote"] = common.check_quote(
+                events, penalty.get(rubric_schema.ROUND), penalty.get(rubric_schema.QUOTE, "")
             )
-            штраф["_засчитан"] = штраф["_цитата"] != "не найдена"
-    return проход
+            penalty["_counted"] = penalty["_quote"] != "не найдена"
+    return pass_of
 
 
-def таблица_ресурсов(события: list[dict]) -> str:
+def table_resources(events: list[dict]) -> str:
     """Подтверждённые скриптом траты — судье отдельным блоком, а не текстом.
 
     Судья читает транскрипт и состояния скрипта не видит. В прошлых прогонах
@@ -73,12 +74,12 @@ def таблица_ресурсов(события: list[dict]) -> str:
     сработать только при смертельном ранении. Поэтому факты подаются числами,
     а рубрике остаётся их истолковать.
     """
-    итог = next((е for е in события if е.get("тип_события") == "итог"), {})
-    ресурсы = common.ресурсы(события)
-    if not ресурсы:
+    total = next((ev for ev in events if ev.get("event_type") == "итог"), {})
+    resources = common.resources(events)
+    if not resources:
         return ""
 
-    строки = [
+    lines = [
         "## ПОДТВЕРЖДЁННЫЕ ТРАТЫ РЕСУРСОВ (данные скрипта, не текст)",
         "",
         "Это единственный источник правды о механике. Заявление в реплике, "
@@ -91,19 +92,19 @@ def таблица_ресурсов(события: list[dict]) -> str:
         "На финише |",
         "|---|---|---|---|---|---|---|---|",
     ]
-    for имя, д in ресурсы.items():
-        п = д.get("подтверждено") or {}
-        з = д.get("заявлено") or {}
-        ф = д.get("на_финише") or {}
-        судьба = f"{з.get('судьба', 0)} (подтв. {п.get('судьба', 0)})"
-        строки.append(
-            f"| {имя} | {судьба} | {п.get('удача', 0)} | "
-            f"{п.get('решимость', 0)} | "
-            f"{п.get('стойкость', 0)} | {д.get('решимость_начислена', 0)} | "
-            f"{д.get('провалов_можно_было_перебросить', 0)} | "
-            f"Судьба {ф.get('судьба', '?')}, Удача {ф.get('удача', '?')}, "
-            f"Стойкость {ф.get('стойкость', '?')}, "
-            f"Решимость {ф.get('решимость', '?')} |"
+    for name, dt in resources.items():
+        p = dt.get("confirmed") or {}
+        zn = dt.get("claimed") or {}
+        fn = dt.get("on_finish") or {}
+        fate = f"{zn.get('fate', 0)} (подтв. {p.get('fate', 0)})"
+        lines.append(
+            f"| {name} | {fate} | {p.get('fortune', 0)} | "
+            f"{p.get('resolve', 0)} | "
+            f"{p.get('resilience', 0)} | {dt.get('resolve_awarded', 0)} | "
+            f"{dt.get('failures_could_before_reroll', 0)} | "
+            f"Судьба {fn.get('fate', '?')}, Удача {fn.get('fortune', '?')}, "
+            f"Стойкость {fn.get('resilience', '?')}, "
+            f"Решимость {fn.get('resolve', '?')} |"
         )
 
     # Столбец «Судьба заявлена» здесь не для полноты. Без него судья тремя
@@ -112,7 +113,7 @@ def таблица_ресурсов(события: list[dict]) -> str:
     # дали. Показываем именно ЗАЯВКУ, а не подтверждение: подтвердится она
     # или сгорит, зависит от того, назначит ли мастер проверку, и от игрока
     # это не зависит никак.
-    строки += [
+    lines += [
         "",
         "**Столбец «Судьба заявлена» читать внимательно.** Игрок вправе назвать "
         "число на кубах, когда тратит Судьбу: «ТРАЧУ СУДЬБУ, беру 01». Это "
@@ -127,9 +128,9 @@ def таблица_ресурсов(события: list[dict]) -> str:
         "без заявки на Судьбу, и за игнорирование выданного скриптом результата.",
     ]
 
-    порча = итог.get("порча_языка") or {}
-    if порча:
-        строки += [
+    corruption = total.get("corruption_language") or {}
+    if corruption:
+        lines += [
             "",
             "## ПОРЧА РУССКОГО ЯЗЫКА (данные скрипта)",
             "",
@@ -141,13 +142,13 @@ def таблица_ресурсов(события: list[dict]) -> str:
             "Слова с подменёнными буквами |",
             "|---|---|---|---|",
         ]
-        for имя, д in порча.items():
-            слова = ", ".join(д.get("смешанные_слова") or []) or "—"
-            строки.append(
-                f"| {имя} | {д.get('реплик', 0)} | "
-                f"{д.get('целиком_не_по_русски', 0)} | {слова} |"
+        for name, dt in corruption.items():
+            words = ", ".join(dt.get("mixed_words") or []) or "—"
+            lines.append(
+                f"| {name} | {dt.get('lines', 0)} | "
+                f"{dt.get('wholly_not_russian', 0)} | {words} |"
             )
-        строки += [
+        lines += [
             "",
             "Слова с подменёнными буквами — это латинская буква внутри русского "
             "слова: «кивaет», «пoгреб». Глазом такое не ловится, поэтому считает "
@@ -155,19 +156,19 @@ def таблица_ресурсов(события: list[dict]) -> str:
             "строже, чем за неловкий оборот.",
         ]
     else:
-        строки += ["", "Порчи русского языка скрипт не нашёл: ни чужих реплик, "
+        lines += ["", "Порчи русского языка скрипт не нашёл: ни чужих реплик, "
                    "ни подменённых букв."]
 
-    смертей = (итог.get("бой") or {}).get("смертей", 0)
-    судьба_потрачена = sum((д.get("подтверждено") or {}).get("судьба", 0)
-                           for д in ресурсы.values())
-    строки += [
+    deaths = (total.get("combat") or {}).get("deaths", 0)
+    fate_spent = sum((dt.get("confirmed") or {}).get("fate", 0)
+                           for dt in resources.values())
+    lines += [
         "",
         "Как этим пользоваться при оценке «Правил»:",
         "",
         "- Судьба тратится ТОЛЬКО при смертельном ранении, по запросу скрипта. "
-        f"В этой сессии смертельных ранений было {смертей}, Судьба потрачена "
-        f"{судьба_потрачена} раз. Если поводов не возникало, отсутствие траты "
+        f"В этой сессии смертельных ранений было {deaths}, Судьба потрачена "
+        f"{fate_spent} раз. Если поводов не возникало, отсутствие траты "
         "Судьбы — не упрёк никому.",
         "- Персонаж, доигравший с полными руками, выше тройки по «Правилам» "
         "не заслуживает — но только если колонка «провалов, которые можно было "
@@ -175,74 +176,74 @@ def таблица_ресурсов(события: list[dict]) -> str:
         "- Начисленная Решимость — оценка мастера за игру по Мотивации. "
         "Высокое число говорит, что персонаж держал свою цель под давлением.",
     ]
-    return "\n".join(строки)
+    return "\n".join(lines)
 
 
-async def судить(аргументы) -> dict:
-    события = common.прочитать_лог(аргументы.log)
+async def judge(args) -> dict:
+    events = common.read_log(args.log)
 
-    только = None
-    if аргументы.rounds_file:
-        только = json.loads(Path(аргументы.rounds_file).read_text(encoding="utf-8"))
-    elif аргументы.sample:
-        только = common.выбрать_круги(события, аргументы.sample)
+    only = None
+    if args.rounds_file:
+        only = json.loads(Path(args.rounds_file).read_text(encoding="utf-8"))
+    elif args.sample:
+        only = common.choose_rounds(events, args.sample)
 
-    текст = common.транскрипт(события, слепой=True, только_круги=только)
-    сводка = таблица_ресурсов(события)
-    if сводка:
-        текст += "\n\n" + сводка
-    промпт = Path(аргументы.rubric).read_text(encoding="utf-8")
+    text = common.transcript(events, blind=True, only_rounds=only)
+    summary = table_resources(events)
+    if summary:
+        text += "\n\n" + summary
+    prompt = Path(args.rubric).read_text(encoding="utf-8")
 
-    провайдер = провайдеры.создать(аргументы.provider)
-    проходы = []
+    provider = providers.create(args.provider)
+    passes = []
     try:
-        for номер in range(1, аргументы.passes + 1):
-            print(f"— проход {номер} из {аргументы.passes}…", flush=True)
-            проход = await один_проход(провайдер, аргументы.model, промпт, текст, номер)
-            проходы.append(сверить_цитаты(проход, события))
+        for index in range(1, args.passes + 1):
+            print(f"— проход {index} из {args.passes}…", flush=True)
+            pass_of = await one_pass_of(provider, args.model, prompt, text, index)
+            passes.append(verify_quotes(pass_of, events))
     finally:
-        await провайдер.завершить()
+        await provider.shutdown()
 
-    результат = {
-        "лог": str(аргументы.log),
-        "круги": только,
-        "проходов": len(проходы),
-        "модель_судьи": аргументы.model,
-        "рубрика": Path(аргументы.rubric).name,
-        "проходы": проходы,
+    result = {
+        "log": str(args.log),
+        "rounds": only,
+        "pass_count": len(passes),
+        "judge_model": args.model,
+        "rubric": Path(args.rubric).name,
+        "passes": passes,
     }
-    Path(аргументы.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(аргументы.out).write_text(
-        json.dumps(результат, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out).write_text(
+        json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    return результат
+    return result
 
 
 def main() -> int:
-    разбор = argparse.ArgumentParser(description="Слепой судья по логу прогона")
-    разбор.add_argument("--log", required=True, nargs="+",
+    parsed = argparse.ArgumentParser(description="Слепой судья по логу прогона")
+    parsed.add_argument("--log", required=True, nargs="+",
                         help="один лог или несколько подряд (продолженный прогон)")
-    разбор.add_argument("--out", required=True)
-    разбор.add_argument("--passes", type=int, default=3)
-    разбор.add_argument("--provider", default="claude")
-    разбор.add_argument("--model", default="opus")
-    разбор.add_argument("--sample", type=int, default=None,
+    parsed.add_argument("--out", required=True)
+    parsed.add_argument("--passes", type=int, default=3)
+    parsed.add_argument("--provider", default="claude")
+    parsed.add_argument("--model", default="opus")
+    parsed.add_argument("--sample", type=int, default=None,
                         help="судить только выборку из N кругов")
-    разбор.add_argument("--rounds-file", default=None,
+    parsed.add_argument("--rounds-file", default=None,
                         help="JSON со списком кругов выборки")
-    разбор.add_argument("--rubric", default=str(КОРЕНЬ / "rubric.md"),
+    parsed.add_argument("--rubric", default=str(ROOT / "rubric.md"),
                         help="rubric.md для игроков или rubric-gm.md для мастера")
-    аргументы = разбор.parse_args()
+    args = parsed.parse_args()
 
-    результат = asyncio.run(судить(аргументы))
-    засчитано = сумма = 0
-    for проход in результат["проходы"]:
-        for данные in проход.get("персонажи", {}).values():
-            for оценка in данные.get("критерии", {}).values():
-                сумма += 1
-                засчитано += bool(оценка.get("_засчитан"))
-    print(f"баллов с подтверждённой цитатой: {засчитано} из {сумма}")
-    print(f"результат: {аргументы.out}")
+    result = asyncio.run(judge(args))
+    counted = sum_of = 0
+    for pass_of in result["passes"]:
+        for data in pass_of.get(rubric_schema.CHARACTERS, {}).values():
+            for grade in data.get(rubric_schema.CRITERIA, {}).values():
+                sum_of += 1
+                counted += bool(grade.get("_counted"))
+    print(f"баллов с подтверждённой цитатой: {counted} из {sum_of}")
+    print(f"результат: {args.out}")
     return 0
 
 

@@ -374,7 +374,7 @@ def main() -> int:
              if run.dice.doubles_share else ""))
     print(f"токенов: {run.token_totals}, стоимость: ${run.cost:.4f}")
     for name, data in run.counters.items():
-        print(f"  {name:8} ходов {data['turns']:3}  тайных {data['тайных']:2}  "
+        print(f"  {name:8} ходов {data['turns']:3}  тайных {data['secret']:2}  "
               f"самобросков {data['self_rolls']:2}")
 
     summary = run._collate_providers()

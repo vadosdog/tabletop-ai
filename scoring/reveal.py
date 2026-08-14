@@ -18,16 +18,17 @@ import json
 import sys
 from pathlib import Path
 
-КОРЕНЬ = Path(__file__).resolve().parent
-sys.path.insert(0, str(КОРЕНЬ))
-sys.path.insert(0, str(КОРЕНЬ.parent / "orchestrator"))
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT.parent / "orchestrator"))
 
 import common  # noqa: E402
 
-from src.prompts import Промпты  # noqa: E402
-from src.providers import base as провайдеры  # noqa: E402
+from src.prompts import Prompts  # noqa: E402
+from src.providers import base as providers  # noqa: E402
+import rubric_schema
 
-ПРОМПТ = """Ты — аналитик, разбирающий закончившуюся сессию настольной ролевой игры.
+PROMPT = """Ты — аналитик, разбирающий закончившуюся сессию настольной ролевой игры.
 
 Тебе дают две вещи: скрытую правду модуля, которую знал только мастер, и полный
 лог сессии. Твоя работа — определить, что партия успела раскрыть, а что так и
@@ -72,87 +73,87 @@ from src.providers import base as провайдеры  # noqa: E402
 """
 
 
-async def оценить(аргументы) -> dict:
-    события = common.прочитать_лог(аргументы.log)
-    вопросы = json.loads(Path(аргументы.questions).read_text(encoding="utf-8"))
+async def grade(args) -> dict:
+    events = common.read_log(args.log)
+    questions = json.loads(Path(args.questions).read_text(encoding="utf-8"))
 
-    документ = (КОРЕНЬ.parent / аргументы.document).resolve()
-    промпты = Промпты(документ, КОРЕНЬ.parent / "orchestrator")
+    document = (ROOT.parent / args.document).resolve()
+    prompts = Prompts(document, ROOT.parent / "orchestrator")
     # Скрытая правда и тайны берутся из промпта мастера в документе проекта —
     # чтобы не держать вторую копию модуля, которая разъедется с первой.
-    правда = промпты.блоки["мастер"]
+    true_of = prompts.blocks["gm"]
 
-    задание = "\n\n".join([
-        ПРОМПТ,
+    task = "\n\n".join([
+        PROMPT,
         "# СКРЫТАЯ ПРАВДА МОДУЛЯ И ТАЙНЫ ИГРОКОВ",
-        правда,
+        true_of,
         "# ВОПРОСЫ, НА КОТОРЫЕ НАДО ОТВЕТИТЬ",
-        json.dumps(вопросы, ensure_ascii=False, indent=2),
+        json.dumps(questions, ensure_ascii=False, indent=2),
     ])
-    транскрипт = common.транскрипт(события, слепой=True)
+    transcript = common.transcript(events, blind=True)
 
-    провайдер = провайдеры.создать(аргументы.provider)
+    provider = providers.create(args.provider)
     try:
-        сессия = await провайдер.открыть("Аналитик", задание, аргументы.model)
-        ответ = await сессия.отправить(
-            транскрипт + "\n\nРазбери сессию по вопросам. Верни только JSON."
+        session = await provider.open("Аналитик", task, args.model)
+        reply = await session.send(
+            transcript + "\n\nРазбери сессию по вопросам. Верни только JSON."
         )
     finally:
-        await провайдер.завершить()
+        await provider.shutdown()
 
-    разбор = common.вынуть_json(ответ.текст)
+    parsed = common.extract_json(reply.text)
 
     # Цитаты сверяются так же, как у судьи: ненайденная не подтверждает раскрытие.
-    for пункт in разбор.get("вопросы", []) + разбор.get("тайны", []):
-        цитата = пункт.get("цитата") or ""
-        пункт["_цитата"] = (
-            common.проверить_цитату(события, пункт.get("круг"), цитата)
-            if цитата else "нет цитаты"
+    for item in parsed.get("questions", []) + parsed.get("тайны", []):
+        quote = item.get(rubric_schema.QUOTE) or ""
+        item["_quote"] = (
+            common.check_quote(events, item.get("round"), quote)
+            if quote else "нет цитаты"
         )
-        подтверждено = пункт["_цитата"] not in ("не найдена", "нет цитаты")
-        ключ = "раскрыт" if "раскрыт" in пункт else "вскрыта"
-        if пункт.get(ключ) and not подтверждено:
-            пункт[ключ] = False
-            пункт["_снято"] = "цитата не подтвердилась"
+        confirmed = item["_quote"] not in ("не найдена", "нет цитаты")
+        key = "раскрыт" if "раскрыт" in item else "вскрыта"
+        if item.get(key) and not confirmed:
+            item[key] = False
+            item["_dealt"] = "цитата не подтвердилась"
 
-    раскрыто = sum(1 for в in разбор.get("вопросы", []) if в.get("раскрыт"))
-    всего = len(разбор.get("вопросы", [])) or len(вопросы["вопросы"])
-    вскрыто = sum(1 for т in разбор.get("тайны", []) if т.get("вскрыта"))
+    revealed = sum(1 for v in parsed.get("questions", []) if v.get("раскрыт"))
+    total_of = len(parsed.get("questions", [])) or len(questions["questions"])
+    exposed = sum(1 for tx in parsed.get("тайны", []) if tx.get("exposed"))
 
-    разбор["_свод"] = {
-        "загадок_раскрыто": раскрыто,
-        "загадок_всего": всего,
-        "доля": round(раскрыто / всего, 2) if всего else 0,
-        "тайн_вскрыто": вскрыто,
-        "тайн_всего": len(вопросы.get("тайны_игроков", {})),
-        "модель": ответ.модель_факт or ответ.модель,
-        "стоимость": ответ.стоимость,
+    parsed["_summary"] = {
+        "загадок_раскрыто": revealed,
+        "загадок_всего": total_of,
+        "share": round(revealed / total_of, 2) if total_of else 0,
+        "тайн_вскрыто": exposed,
+        "тайн_всего": len(questions.get("тайны_игроков", {})),
+        "model": reply.model_actual or reply.model,
+        "cost": reply.cost,
     }
 
-    Path(аргументы.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(аргументы.out).write_text(
-        json.dumps(разбор, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out).write_text(
+        json.dumps(parsed, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    return разбор
+    return parsed
 
 
 def main() -> int:
-    разбор_аргументов = argparse.ArgumentParser(description="Раскрытие ваншота")
-    разбор_аргументов.add_argument("--log", required=True, nargs="+")
-    разбор_аргументов.add_argument("--out", required=True)
-    разбор_аргументов.add_argument("--questions", default=str(КОРЕНЬ / "раскрытие.json"))
-    разбор_аргументов.add_argument("--document", default="vypusk-1-wfrp-desyatina.md")
-    разбор_аргументов.add_argument("--provider", default="claude")
-    разбор_аргументов.add_argument("--model", default="opus")
-    аргументы = разбор_аргументов.parse_args()
+    parsed_args = argparse.ArgumentParser(description="Раскрытие ваншота")
+    parsed_args.add_argument("--log", required=True, nargs="+")
+    parsed_args.add_argument("--out", required=True)
+    parsed_args.add_argument("--questions", default=str(ROOT / "reveal.json"))
+    parsed_args.add_argument("--document", default="vypusk-1-wfrp-desyatina.md")
+    parsed_args.add_argument("--provider", default="claude")
+    parsed_args.add_argument("--model", default="opus")
+    args = parsed_args.parse_args()
 
-    итог = asyncio.run(оценить(аргументы))
-    свод = итог["_свод"]
-    print(f"загадок раскрыто: {свод['загадок_раскрыто']} из {свод['загадок_всего']} "
-          f"(доля {свод['доля']})")
-    print(f"тайн вскрыто: {свод['тайн_вскрыто']} из {свод['тайн_всего']}")
-    print(f"исход: {итог.get('исход', {}).get('серебро')}")
-    print(f"результат: {аргументы.out}")
+    total = asyncio.run(grade(args))
+    summary = total["_summary"]
+    print(f"загадок раскрыто: {summary['загадок_раскрыто']} из {summary['загадок_всего']} "
+          f"(доля {summary['share']})")
+    print(f"тайн вскрыто: {summary['тайн_вскрыто']} из {summary['тайн_всего']}")
+    print(f"исход: {total.get('outcome', {}).get('серебро')}")
+    print(f"результат: {args.out}")
     return 0
 
 

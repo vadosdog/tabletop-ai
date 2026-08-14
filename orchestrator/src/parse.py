@@ -59,7 +59,7 @@ _SELF_ROLL = [
 @dataclass
 class Attack:
     who: str
-    by_to: str
+    target_name: str
     weapon: str
     defence: str | None = None
     line: str = ""
@@ -170,14 +170,14 @@ def attacks(text: str, known: list[str]) -> tuple[list[Attack], list[str]]:
             anomalies.append("непарсимая_атака")
             continue
 
-        by_to, _, tags_targets = _clean_name(parts[0], known)
+        target_name, _, tags_targets = _clean_name(parts[0], known)
         weapon = re.sub(r"[\[\]*_]", "", parts[1]).strip() if len(parts) > 1 else "кулаки"
         defence = parts[2] if len(parts) > 2 else None
         if len(parts) > 3:
             anomalies.append("лишние_поля_в_атаке")
 
         tags = [mk for mk in tags_who + tags_targets if mk != "проверка_за_нпс"]
-        found.append(Attack(who, by_to, weapon, defence,
+        found.append(Attack(who, target_name, weapon, defence,
                                matched.group(0).strip(), tags))
         anomalies.extend(tags)
 
@@ -270,7 +270,7 @@ def corruption_language(text: str) -> dict:
     return {
         "mixed_words": sort_unique(mixed),
         "wholly_not_russian": wholly_foreign,
-        "испорчено": bool(mixed) or wholly_foreign,
+        "corrupted": bool(mixed) or wholly_foreign,
     }
 
 

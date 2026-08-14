@@ -32,13 +32,13 @@ KEYS: dict[str, str | None] = {
 # нижней общей ступени. Одно и то же слово у разных вендоров означает разное
 # число токенов — это записано в РАСХОЖДЕНИЯ и уходит в отчёт.
 REASONING: dict[str, dict[str, str]] = {
-    "claude": {"выкл": "low", "low": "low", "medium": "medium", "high": "high"},
-    "openai": {"выкл": "none", "low": "low", "medium": "medium", "high": "high"},
-    "gemini": {"выкл": "low", "low": "low", "medium": "medium", "high": "high"},
-    "xai": {"выкл": "low", "low": "low", "medium": "medium", "high": "high"},
+    "claude": {"off": "low", "low": "low", "medium": "medium", "high": "high"},
+    "openai": {"off": "none", "low": "low", "medium": "medium", "high": "high"},
+    "gemini": {"off": "low", "low": "low", "medium": "medium", "high": "high"},
+    "xai": {"off": "low", "low": "low", "medium": "medium", "high": "high"},
     # Qwen 3.7 Max размышление поддерживает, и прослойка его пробрасывает:
     # «reasoning» есть в supported_parameters эндпоинта.
-    "openrouter": {"выкл": "low", "low": "low", "medium": "medium", "high": "high"},
+    "openrouter": {"off": "low", "low": "low", "medium": "medium", "high": "high"},
 }
 
 # Что заведомо расходится между вендорами. Список ведётся руками и намеренно:
@@ -221,12 +221,12 @@ def block_params(
             "timeout_s": params.timeout_s,
             "attempts": params.attempts,
         },
-        "размышление_словами_вендора": {
+        "reasoning_in_words_vendor": {
             name: params.level(name) for name in taken
         },
         "cast": providers,
         "known_discrepancies": discrepancies,
-        "оговорка_о_детерминизме":
+        "caveat_about_determinism":
             "Броски воспроизводятся по зерну: то же зерно даёт ту же последовательность. "
             "Реплики моделей не воспроизводятся ни у одного из четырёх вендоров, даже при "
             "тех же параметрах и том же контексте. Повторный запуск даст те же кубики и "

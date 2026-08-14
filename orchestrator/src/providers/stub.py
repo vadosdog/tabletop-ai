@@ -190,7 +190,7 @@ class StubSession:
                     "quote": " ".join(quote.split()[:8]),
                     "пояснение": "заглушка",
                 }
-            characters[name] = {"criteria": criteria, "штрафы": []}
+            characters[name] = {"criteria": criteria, "penalties": []}
         return json.dumps({"characters": characters}, ensure_ascii=False)
 
 

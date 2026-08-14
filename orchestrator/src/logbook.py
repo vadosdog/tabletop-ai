@@ -51,12 +51,12 @@ class Logbook:
         latency_ms: int | None = None,
         tokens: dict | None = None,
         cost: float | None = None,
-        replies_v_scene: int | None = None,
+        replies_in_scene: int | None = None,
         context_chars: int | None = None,
     ) -> dict:
         return self.write(
             "ход",
-            replies_v_scene=replies_v_scene,
+            replies_in_scene=replies_in_scene,
             context_chars=context_chars,
             round=round,
             mode=mode,

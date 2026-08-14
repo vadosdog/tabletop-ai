@@ -83,7 +83,7 @@ def тест_попадание_и_урон():
     total = c.attack("Курт", "Тварь", "меч")
     assert total.hit and total.margin == 2
     assert total.location == "левая рука"          # 12 → 21
-    assert total.damage_to_armour == 4 + 4 + 2        # СБ + рейтинг + разница
+    assert total.damage_before_armour == 4 + 4 + 2        # СБ + рейтинг + разница
     assert total.defence == 4 + 1                   # ТБ цели + броня локации
     assert total.wounds_dealt == 5
     assert c.sheet("Тварь").wounds == 15 - 5
@@ -110,7 +110,7 @@ def тест_арбалет_без_бонуса_силы():
     c = combat([12, 90])
     total = c.attack("Курт", "Тварь", "арбалет")
     # Рейтинг 9 фиксированный, бонус Силы не прибавляется.
-    assert total.damage_to_armour == 9 + total.margin
+    assert total.damage_before_armour == 9 + total.margin
 
 
 def тест_пробивающий_берёт_десятки():
@@ -118,7 +118,7 @@ def тест_пробивающий_берёт_десятки():
     c = combat([30, 50])
     total = c.attack("Ансельм", "Тварь", "молот")
     assert total.hit and total.margin == 1
-    assert total.damage_to_armour == 3 + 4 + 3        # СБ + рейтинг + десятки броска
+    assert total.damage_before_armour == 3 + 4 + 3        # СБ + рейтинг + десятки броска
     assert total.margin < 3, "проверка бессмысленна, если разница и так больше"
 
 
@@ -155,7 +155,7 @@ def тест_проваленный_дубль_это_фумбл():
     c = combat([99, 10])
     total = c.attack("Лизель", "Тварь", "нож")
     assert total.doubles and "фумбл" in total.tags and not total.hit
-    assert c.counters["фумблов"] == 1
+    assert c.counters["fumbles"] == 1
 
 
 def тест_сто_всегда_фумбл():
@@ -193,7 +193,7 @@ def тест_отказ_от_судьбы_убивает():
     c.sheet("Лизель").wounds = 0
     c.attack("Тварь", "Лизель", "когти")
     c.apply_fate("Лизель", False)
-    assert c.sheet("Лизель").dead and c.counters["смертей"] == 1
+    assert c.sheet("Лизель").dead and c.counters["deaths"] == 1
 
 
 def тест_счётчик_критов_отрывает_конечность():

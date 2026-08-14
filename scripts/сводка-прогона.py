@@ -14,67 +14,67 @@ import sys
 from pathlib import Path
 
 
-def сводка(путь: Path) -> str:
-    события = [json.loads(с) for с in
-               путь.read_text(encoding="utf-8").splitlines() if с.strip()]
-    итог = next((е for е in события if е["тип_события"] == "итог"), None)
-    ходы = [е for е in события if е["тип_события"] == "ход"]
-    строки: list[str] = []
+def summary(path: Path) -> str:
+    events = [json.loads(s) for s in
+               path.read_text(encoding="utf-8").splitlines() if s.strip()]
+    total = next((ev for ev in events if ev["event_type"] == "итог"), None)
+    turns = [ev for ev in events if ev["event_type"] == "ход"]
+    lines: list[str] = []
 
-    if итог is None:
-        строки.append("⚠️ ПРОГОН ОБОРВАЛСЯ: итога в логе нет")
-        строки.append(f"успело пройти ходов: {len(ходы)}")
-        return "\n".join(строки)
+    if total is None:
+        lines.append("⚠️ ПРОГОН ОБОРВАЛСЯ: итога в логе нет")
+        lines.append(f"успело пройти ходов: {len(turns)}")
+        return "\n".join(lines)
 
-    остановка = итог.get("остановка") or "?"
-    сорвалось = остановка.startswith("сбой")
-    строки.append(f"{'❌' if сорвалось else '✅'} {путь.parent.name}")
-    строки.append(f"кругов: {итог.get('кругов')}, остановка: {остановка}")
-    строки.append(f"минут: {итог.get('минут')}, бросков: {итог.get('бросков')}")
+    stop = total.get("stop") or "?"
+    failed = stop.startswith("сбой")
+    lines.append(f"{'❌' if failed else '✅'} {path.parent.name}")
+    lines.append(f"кругов: {total.get('rounds')}, остановка: {stop}")
+    lines.append(f"минут: {total.get('minutes')}, бросков: {total.get('rolls')}")
 
-    обрывы = {и: д.get("обрывов_по_пределу") for и, д in
-              (итог.get("по_провайдерам") or {}).items() if д.get("обрывов_по_пределу")}
-    отказы = итог.get("отказы") or []
+    truncations = {i: dt.get("truncations_by_limit") for i, dt in
+              (total.get("provider_totals") or {}).items() if dt.get("truncations_by_limit")}
+    refusals = total.get("refusals") or []
 
-    строки.append("")
-    if обрывы:
-        строки.append(f"⚠️ обрезаны по лимиту: {обрывы}")
+    lines.append("")
+    if truncations:
+        lines.append(f"⚠️ обрезаны по лимиту: {truncations}")
     else:
-        строки.append("обрывов по лимиту нет")
-    if отказы:
-        строки.append(f"⚠️ отказов: {len(отказы)}")
-        for о in отказы[:3]:
-            строки.append(f"  круг {о.get('круг')} {о.get('кто')} "
-                          f"({о.get('провайдер')}): {о.get('цитата','')[:80]}")
+        lines.append("обрывов по лимиту нет")
+    if refusals:
+        lines.append(f"⚠️ отказов: {len(refusals)}")
+        for about in refusals[:3]:
+            lines.append(f"  круг {about.get('round')} {about.get('who')} "
+                          f"({about.get('provider')}): {about.get('quote','')[:80]}")
     else:
-        строки.append("отказов нет")
+        lines.append("отказов нет")
 
-    строки.append("")
-    строки.append("по провайдерам:")
-    for имя, д in sorted((итог.get("по_провайдерам") or {}).items()):
-        кэш = д.get("доля_кэша")
-        разм = д.get("доля_размышления")
-        строки.append(
-            f"  {имя}: ${д.get('деньги_usd', 0):.4f}, "
-            f"кэш {'—' if кэш is None else f'{кэш:.0%}'}, "
-            f"размышление {'—' if разм is None else f'{разм:.0%}'}, "
-            f"повторов {д.get('повторов', 0)}"
+    lines.append("")
+    lines.append("по провайдерам:")
+    for name, dt in sorted((total.get("provider_totals") or {}).items()):
+        cache = dt.get("share_cache")
+        reas = dt.get("share_reasoning")
+        lines.append(
+            f"  {name}: ${dt.get('cost_usd', 0):.4f}, "
+            f"кэш {'—' if cache is None else f'{cache:.0%}'}, "
+            f"размышление {'—' if reas is None else f'{reas:.0%}'}, "
+            f"повторов {dt.get('retries', 0)}"
         )
-    строки.append(f"итого: ${итог.get('стоимость_usd')}")
+    lines.append(f"итого: ${total.get('cost_usd')}")
 
     # Апстрим прослойки: сменился посреди прогона — это важнее всего остального.
-    отметки = [е for е in события if е["тип_события"] == "апстрим"]
-    if len(отметки) > 1:
-        строки.append("")
-        строки.append("⚠️ АПСТРИМ МЕНЯЛСЯ: "
-                      + " → ".join(str(о.get("апстрим")) for о in отметки))
-    elif отметки:
-        строки.append(f"апстрим: {отметки[0].get('апстрим')} (не менялся)")
+    marks = [ev for ev in events if ev["event_type"] == "апстрим"]
+    if len(marks) > 1:
+        lines.append("")
+        lines.append("⚠️ АПСТРИМ МЕНЯЛСЯ: "
+                      + " → ".join(str(about.get("upstream")) for about in marks))
+    elif marks:
+        lines.append(f"апстрим: {marks[0].get('upstream')} (не менялся)")
 
-    return "\n".join(строки)
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         sys.exit("нужен путь к лог.jsonl")
-    print(сводка(Path(sys.argv[1])))
+    print(summary(Path(sys.argv[1])))

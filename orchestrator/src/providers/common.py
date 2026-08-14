@@ -74,7 +74,7 @@ class Usage:
     def mapping(self) -> dict:
         total = {
             "input": self.input, "output": self.output,
-            "из_них_размышление": self.reasoning,
+            "of_them_reasoning": self.reasoning,
             "cache_read": self.cache_read, "cache_write": self.cache_write,
             "requests": self.requests, "retries": self.retries,
             "refusals": self.refusal_count, "truncations_by_limit": self.truncations,

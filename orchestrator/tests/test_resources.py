@@ -203,19 +203,19 @@ def тест_выбранное_число_читается_из_заявки():
 def тест_порча_языка_ловит_подменённые_буквы():
     """Латинская буква внутри русского слова — глазом не видно, а это порча."""
     clean = corruption_language("Ханна кивает и уходит в погреб.")
-    assert not clean["испорчено"], clean
+    assert not clean["corrupted"], clean
 
     substitution = corruption_language("Ханна кивaет и уходит в пoгреб.")
-    assert substitution["испорчено"]
+    assert substitution["corrupted"]
     assert len(substitution["mixed_words"]) == 2, substitution["mixed_words"]
 
     foreign = corruption_language("Ханна sparingly and quietly continues resting by the road.")
-    assert foreign["испорчено"] and foreign["wholly_not_russian"]
+    assert foreign["corrupted"] and foreign["wholly_not_russian"]
 
     # Ложных срабатываний быть не должно: аббревиатура и одинокая латинская
     # буква — это не порча, а обычная запись.
     for harmless in ("Он показал пункт a в бумаге.", "Курт смотрит на HP."):
-        assert not corruption_language(harmless)["испорчено"], harmless
+        assert not corruption_language(harmless)["corrupted"], harmless
 
 
 def тест_сержанту_дали_судьбу():

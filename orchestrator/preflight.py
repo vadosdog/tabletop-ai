@@ -54,8 +54,8 @@ async def check(name: str, model: str, is_refusal: bool, config: dict) -> dict:
         "provider": name,
         "model": model,
         "time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "принято": {},
-        "отвергнуто": [],
+        "accepted": {},
+        "rejected": [],
     }
     events: list[dict] = []
     provider = providers.create(
@@ -73,7 +73,7 @@ async def check(name: str, model: str, is_refusal: bool, config: dict) -> dict:
     finally:
         total["events"] = events
         dropped = sorted(getattr(provider, "dropped", set()))
-        total["отвергнуто"] = dropped
+        total["rejected"] = dropped
         total["discrepancies"] = list(getattr(provider, "observed_discrepancies", []))
         await provider.shutdown()
 
@@ -81,9 +81,9 @@ async def check(name: str, model: str, is_refusal: bool, config: dict) -> dict:
     # будет один effort: температуру и предел ответа подписочный SDK не умеет,
     # и записать их сюда значило бы соврать про равенство условий.
     try:
-        total["принято"] = provider.what_given()
+        total["accepted"] = provider.what_given()
     except Exception as error:
-        total["принято"] = {"не удалось прочитать тело запроса": repr(error)}
+        total["accepted"] = {"не удалось прочитать тело запроса": repr(error)}
     total["reply"] = reply.text
     total["tokens"] = reply.tokens
     total["cost"] = reply.cost
@@ -94,13 +94,13 @@ async def check(name: str, model: str, is_refusal: bool, config: dict) -> dict:
     if is_refusal:
         caught = "отказ" in reply.tags
         suspicion = "подозрение_на_отказ" in reply.tags
-        total["ловля_отказа"] = {
+        total["catching_refusal"] = {
             "запрос_был_отказным": True,
             "пойман": caught,
             "suspicion": suspicion,
             # Модель могла и согласиться играть — это тоже результат, и он
             # интереснее для ролика, чем отказ. Врать про него нельзя.
-            "вывод": ("отказ пойман" if caught else
+            "output_text": ("отказ пойман" if caught else
                       "помечено подозрением, нужен глаз" if suspicion else
                       "модель не отказалась — сыграла сцену"),
         }
@@ -130,15 +130,15 @@ async def main(args) -> int:
             continue
 
         totals.append(total)
-        print(f"принято:    {total['принято']}")
-        if total["отвергнуто"]:
-            print(f"отвергнуто: {', '.join(total['отвергнуто'])}")
+        print(f"принято:    {total['accepted']}")
+        if total["rejected"]:
+            print(f"отвергнуто: {', '.join(total['rejected'])}")
         for line in total["discrepancies"]:
             print(f"расхождение: {line}")
         print(f"токены:     {total['tokens']}")
         print(f"за {total['latency_ms']} мс, метки {total['tags'] or '—'}")
         if "ловля_отказа" in total:
-            print(f"ловля:      {total['ловля_отказа']['вывод']}")
+            print(f"ловля:      {total['catching_refusal']['output_text']}")
         print(f"ответ:      {total['reply'][:400]}")
 
     folder = ROOT.parent / "runs"

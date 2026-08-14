@@ -20,89 +20,89 @@ import shutil
 import sys
 from pathlib import Path
 
-КОРЕНЬ = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(КОРЕНЬ / "scoring"))
-sys.path.insert(0, str(КОРЕНЬ / "orchestrator"))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scoring"))
+sys.path.insert(0, str(ROOT / "orchestrator"))
 
 import common  # noqa: E402
-from report import свести  # noqa: E402
+from report import collate  # noqa: E402
 
-ВЫХОД = КОРЕНЬ / "notion" / "Прогоны"
+OUTPUT = ROOT / "notion" / "Прогоны"
 # Только боевые: проверки мастера и круги ноль в выпуск не идут.
-ОТБОР = "боевой-прогон"
+SAMPLE = "боевой-прогон"
 
 
-def номер_прогона(папка: Path) -> int:
-    хвост = папка.name.rsplit("-", 1)[-1]
-    return int(хвост) if хвост.isdigit() else 1
+def index_run(folder: Path) -> int:
+    tail = folder.name.rsplit("-", 1)[-1]
+    return int(tail) if tail.isdigit() else 1
 
 
-def таблица_баллов(папка: Path, события: list[dict]) -> list[str]:
-    судья_путь = папка / "судья.json"
-    if not судья_путь.exists():
+def table_scores(folder: Path, events: list[dict]) -> list[str]:
+    judge_path = folder / "судья.json"
+    if not judge_path.exists():
         return ["Судья по этому прогону не запускался."]
 
-    судья = json.loads(судья_путь.read_text(encoding="utf-8"))
-    таблица = свести(судья, common.персонажи(события))
-    состав = common.состав(события)
+    judge = json.loads(judge_path.read_text(encoding="utf-8"))
+    table = collate(judge, common.characters(events))
+    cast = common.cast(events)
 
-    строки = [
-        f"Три слепых прохода, модель судьи — {судья.get('модель_судьи', '?')}. "
+    lines = [
+        f"Три слепых прохода, модель судьи — {judge.get('judge_model', '?')}. "
         "Медиана трёх проходов, в скобках разброс между ними.",
         "",
         "| Персонаж | Модель | Сеттинг | Правила | Цель | Тайна | Драма | Штрафы | Итог |",
         "|---|---|---|---|---|---|---|---|---|",
     ]
-    порядок = sorted(таблица, key=lambda и: -таблица[и]["итог"])
-    for имя in порядок:
-        д = таблица[имя]
-        кр = д["критерии"]
-        ячейки = []
-        for критерий in common.КРИТЕРИИ:
-            о = кр.get(критерий, {})
-            ячейки.append(f"{о.get('медиана', '—')} ({о.get('разброс', 0)})")
-        строки.append(
-            f"| {имя} | {(состав.get(имя) or {}).get('модель', '?')} | "
-            + " | ".join(ячейки)
-            + f" | {д['штраф']} | **{д['итог']}** |"
+    order = sorted(table, key=lambda i: -table[i]["total"])
+    for name in order:
+        dt = table[name]
+        cr = dt["criteria"]
+        cells = []
+        for criterion in common.CRITERIA:
+            about = cr.get(criterion, {})
+            cells.append(f"{about.get('median', '—')} ({about.get('spread', 0)})")
+        lines.append(
+            f"| {name} | {(cast.get(name) or {}).get('model', '?')} | "
+            + " | ".join(cells)
+            + f" | {dt['penalty']} | **{dt['total']}** |"
         )
-    return строки
+    return lines
 
 
-def страница(папка: Path) -> str:
-    события = common.прочитать_лог([str(папка / "лог.jsonl")])
-    итог = common.итог_прогона(события)
-    состав = common.состав(события)
-    старт = next((е for е in события if е.get("тип_события") == "старт"), {})
-    конфиг = json.loads((папка / "config.json").read_text(encoding="utf-8"))
-    номер = номер_прогона(папка)
+def page(folder: Path) -> str:
+    events = common.read_log([str(folder / "лог.jsonl")])
+    total = common.total_run(events)
+    cast = common.cast(events)
+    start = next((ev for ev in events if ev.get("event_type") == "старт"), {})
+    config = json.loads((folder / "config.json").read_text(encoding="utf-8"))
+    index = index_run(folder)
 
-    строки = [f"# Боевой прогон №{номер}", ""]
-    строки += [
-        f"**{итог.get('кругов', '?')} кругов, остановка «{итог.get('остановка', '?')}», "
-        f"{итог.get('минут', '?')} минут.** Зерно {итог.get('зерно', '?')}, "
-        f"бросков {итог.get('бросков', '?')}.",
+    lines = [f"# Боевой прогон №{index}", ""]
+    lines += [
+        f"**{total.get('rounds', '?')} кругов, остановка «{total.get('stop', '?')}», "
+        f"{total.get('minutes', '?')} минут.** Зерно {total.get('seed', '?')}, "
+        f"бросков {total.get('rolls', '?')}.",
         "",
-        f"Папка прогона: `{папка.relative_to(КОРЕНЬ)}`",
+        f"Папка прогона: `{folder.relative_to(ROOT)}`",
         "",
         "## Чем запускали",
         "",
         "```bash",
         f"# жребий вендоров: раздача по зерну, у всех новый персонаж",
-        f"python3 orchestrator/run.py --seed {итог.get('зерно', '?')} "
+        f"python3 orchestrator/run.py --seed {total.get('seed', '?')} "
         "--draw-vendors --avoid-repeat",
         "",
         "# сам прогон, отсоединённым процессом",
-        f"python3 orchestrator/run.py --out {папка.relative_to(КОРЕНЬ)}",
+        f"python3 orchestrator/run.py --out {folder.relative_to(ROOT)}",
         "",
         "# судья: три слепых прохода",
-        f"python3 scoring/judge.py --log {папка.relative_to(КОРЕНЬ)}/лог.jsonl \\",
-        f"    --out {папка.relative_to(КОРЕНЬ)}/судья.json",
+        f"python3 scoring/judge.py --log {folder.relative_to(ROOT)}/лог.jsonl \\",
+        f"    --out {folder.relative_to(ROOT)}/судья.json",
         "",
         "# отчёт",
-        f"python3 scoring/report.py --log {папка.relative_to(КОРЕНЬ)}/лог.jsonl \\",
-        f"    --judge {папка.relative_to(КОРЕНЬ)}/судья.json "
-        f"--out {папка.relative_to(КОРЕНЬ)}/отчёт",
+        f"python3 scoring/report.py --log {folder.relative_to(ROOT)}/лог.jsonl \\",
+        f"    --judge {folder.relative_to(ROOT)}/судья.json "
+        f"--out {folder.relative_to(ROOT)}/отчёт",
         "```",
         "",
         "## Кто за кого играл",
@@ -110,87 +110,92 @@ def страница(папка: Path) -> str:
         "| Персонаж | Провайдер | Модель |",
         "|---|---|---|",
     ]
-    for имя, что in состав.items():
-        строки.append(f"| {имя} | {что.get('провайдер')} | {что.get('модель')} |")
+    for name, what in cast.items():
+        lines.append(f"| {name} | {what.get('provider')} | {what.get('model')} |")
 
-    параметры = (старт.get("параметры_генерации") or {}).get("задано_всем") or {}
-    if параметры:
-        строки += ["", "## Условия сравнения", "",
+    params = (start.get("generation_params") or {}).get("given_everyone") or {}
+    if params:
+        lines += ["", "## Условия сравнения", "",
                    "Одинаково у всех игроков, выставлено до первого хода:", "",
                    "| Параметр | Значение |", "|---|---|"]
-        for ключ, значение in параметры.items():
-            строки.append(
-                f"| {ключ.replace('_', ' ')} | "
-                f"{'не задаётся' if значение is None else значение} |"
+        for key, value in params.items():
+            lines.append(
+                f"| {key.replace('_', ' ')} | "
+                f"{'не задаётся' if value is None else value} |"
             )
-    строки += ["", f"Предел кругов {конфиг.get('предел_кругов')}, "
-               f"мастер {конфиг['мастер']['модель']}, "
-               f"судья {конфиг['судья']['модель']}."]
+    lines += ["", f"Предел кругов {config.get('max_rounds')}, "
+               f"мастер {config['gm']['model']}, "
+               f"судья {config['judge']['model']}."]
 
-    строки += ["", "## Оценки судьи", ""] + таблица_баллов(папка, события)
+    lines += ["", "## Оценки судьи", ""] + table_scores(folder, events)
 
-    ресурсы = common.ресурсы(события)
-    if любые_события_ресурсов(события):
-        строки += ["", "## Ресурсы", "",
+    resources = common.resources(events)
+    if any_of_events_resources(events):
+        lines += ["", "## Ресурсы", "",
                    "| Игрок | Заявлено | Подтверждено | Решимость начислена | "
                    "Провалов можно было перебросить |", "|---|---|---|---|---|"]
-        for имя, д in ресурсы.items():
-            з = ", ".join(f"{к} ×{v}" for к, v in (д["заявлено"] or {}).items()) or "—"
-            п = ", ".join(f"{к} ×{v}" for к, v in (д["подтверждено"] or {}).items()) or "—"
-            строки.append(f"| {имя} | {з} | {п} | {д['решимость_начислена']} | "
-                          f"{д['провалов_можно_было_перебросить']} |")
+        for name, dt in resources.items():
+            zn = ", ".join(f"{d} ×{v}" for d, v in (dt["claimed"] or {}).items()) or "—"
+            p = ", ".join(f"{d} ×{v}" for d, v in (dt["confirmed"] or {}).items()) or "—"
+            lines.append(f"| {name} | {zn} | {p} | {dt['resolve_awarded']} | "
+                          f"{dt['failures_could_before_reroll']} |")
 
-    комментарий = папка / "комментарий.md"
-    if комментарий.exists():
-        текст = комментарий.read_text(encoding="utf-8")
+    comment = folder / "комментарий.md"
+    if comment.exists():
+        text = comment.read_text(encoding="utf-8")
         # Заголовок первого уровня уже есть у страницы — понижаем, чтобы
         # в Notion не было двух H1 подряд.
-        текст = re.sub(r"^# ", "## ", текст, count=1, flags=re.MULTILINE)
-        текст = re.sub(r"^## (?!Комментарий)", "### ", текст[текст.index("## "):],
+        text = re.sub(r"^# ", "## ", text, count=1, flags=re.MULTILINE)
+        text = re.sub(r"^## (?!Комментарий)", "### ", text[text.index("## "):],
                        flags=re.MULTILINE)
-        строки += ["", "## Комментарий от Luke", "", текст.split("\n", 1)[1].strip()]
+        lines += ["", "## Комментарий от Luke", "", text.split("\n", 1)[1].strip()]
 
-    return "\n".join(строки).rstrip() + "\n"
-
-
-def любые_события_ресурсов(события: list[dict]) -> bool:
-    return any(е.get("тип_события") == "ресурс" for е in события)
+    return "\n".join(lines).rstrip() + "\n"
 
 
-def главная() -> int:
-    папки = sorted(p for p in (КОРЕНЬ / "runs").iterdir()
-                   if p.is_dir() and ОТБОР in p.name and (p / "лог.jsonl").exists())
-    if not папки:
-        sys.exit("боевых прогонов не нашлось")
+def any_of_events_resources(events: list[dict]) -> bool:
+    return any(ev.get("event_type") == "ресурс" for ev in events)
 
-    if ВЫХОД.exists():
-        shutil.rmtree(ВЫХОД)
-    ВЫХОД.mkdir(parents=True)
 
-    оглавление = ["# Прогоны", "",
+def main() -> int:
+    folders = sorted(p for p in (ROOT / "runs").iterdir()
+                   if p.is_dir() and SAMPLE in p.name and (p / "лог.jsonl").exists())
+    legacy = [f for f in folders if common.is_legacy_format(f)]
+    folders = [f for f in folders if f not in legacy]
+    for f in legacy:
+        print(f"  пропущен (формат до перехода на латиницу): {f.name}")
+    if not folders:
+        sys.exit("боевых прогонов в текущем формате не нашлось"
+                 + (f"; пропущено старых: {len(legacy)}" if legacy else ""))
+
+    if OUTPUT.exists():
+        shutil.rmtree(OUTPUT)
+    OUTPUT.mkdir(parents=True)
+
+    contents = ["# Прогоны", "",
                   "Боевые прогоны выпуска: четыре сессии по 29 кругов, каждая "
                   "модель на каждом персонаже.", "",
                   "| Прогон | Кругов | Минут | Состав |", "|---|---|---|---|"]
 
-    for папка in папки:
-        номер = номер_прогона(папка)
-        имя_файла = f"Боевой прогон №{номер}.md"
-        (ВЫХОД / имя_файла).write_text(страница(папка), encoding="utf-8")
+    for folder in folders:
+        index = index_run(folder)
+        name_file = f"Боевой прогон №{index}.md"
+        (OUTPUT / name_file).write_text(page(folder), encoding="utf-8")
 
-        события = common.прочитать_лог([str(папка / "лог.jsonl")])
-        итог = common.итог_прогона(события)
-        состав = common.состав(события)
-        кто = ", ".join(f"{и}→{(с or {}).get('провайдер')}"
-                        for и, с in состав.items() if и != "Мастер")
-        оглавление.append(f"| №{номер} | {итог.get('кругов', '?')} | "
-                          f"{итог.get('минут', '?')} | {кто} |")
-        print(f"  собрана: {имя_файла}")
+        events = common.read_log([str(folder / "лог.jsonl")])
+        total = common.total_run(events)
+        cast = common.cast(events)
+        who = ", ".join(f"{i}→{(s or {}).get('provider')}"
+                        for i, s in cast.items() if i != "Мастер")
+        contents.append(f"| №{index} | {total.get('rounds', '?')} | "
+                          f"{total.get('minutes', '?')} | {who} |")
+        print(f"  собрана: {name_file}")
 
-    (ВЫХОД / "Прогоны.md").write_text("\n".join(оглавление) + "\n", encoding="utf-8")
-    print(f"\nготово: {ВЫХОД.relative_to(КОРЕНЬ)}")
+    (OUTPUT / "Прогоны.md").write_text("\n".join(contents) + "\n", encoding="utf-8")
+    print(f"\nготово: {OUTPUT.relative_to(ROOT)}")
     print("Перетащить эту папку в Notion: Import → Markdown & CSV.")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(главная())
+    sys.exit(main())

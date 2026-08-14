@@ -116,7 +116,7 @@ class AttackResult:
     margin: int = 0
     hit: bool = False
     location: str = ""
-    damage_to_armour: int = 0
+    damage_before_armour: int = 0
     defence: int = 0
     wounds_dealt: int = 0
     wounds_left: int = 0
@@ -171,8 +171,8 @@ class Combat:
         }
         self.combatants: dict[str, Combatant] = {}
         self.counters = {
-            "attacks": 0, "попаданий": 0, "crits": 0, "фумблов": 0,
-            "doubles": 0, "смертей": 0, "fate_spent": 0,
+            "attacks": 0, "hits": 0, "crits": 0, "fumbles": 0,
+            "doubles": 0, "deaths": 0, "fate_spent": 0,
         }
         self.wounds_lost: dict[str, int] = {}
         self.reached_to_zero: set[str] = set()
@@ -263,12 +263,12 @@ class Combat:
 
     # --- атака ------------------------------------------------------------
 
-    def attack(self, who: str, by_to: str, weapon: str,
+    def attack(self, who: str, target_name: str, weapon: str,
               defence: str | None = None) -> AttackResult:
-        attacker, target = self.sheet(who), self.sheet(by_to)
+        attacker, target = self.sheet(who), self.sheet(target_name)
         weapons = self.weapons.get(normalise(weapon), {"kind": "ближний", "рейтинг": 2,
                                                       "qualities": []})
-        total = AttackResult(attacker=who, target=by_to, weapons=weapon)
+        total = AttackResult(attacker=who, target=target_name, weapons=weapon)
         total.wounds_max_targets = target.wounds_max
         self.counters["attacks"] += 1
 
@@ -296,7 +296,7 @@ class Combat:
             self.counters["doubles"] += 1
             if not success_attacks:
                 total.tags.append("фумбл")
-                self.counters["фумблов"] += 1
+                self.counters["fumbles"] += 1
             elif total.hit:
                 total.tags.append("дубль_крит")
             else:
@@ -306,7 +306,7 @@ class Combat:
 
         if not total.hit:
             return total
-        self.counters["попаданий"] += 1
+        self.counters["hits"] += 1
 
         # Урон: у луков и арбалетов рейтинг фиксированный, без бонуса Силы.
         gain = total.margin
@@ -319,11 +319,11 @@ class Combat:
 
         base = weapons["рейтинг"] + (0 if weapons["kind"] in ("механический", "лук")
                                     else attacker.sb)
-        total.damage_to_armour = base + gain
+        total.damage_before_armour = base + gain
         total.location = location(total.roll_attacks)
         armour = int(target.armour.get(total.location, 0))
         total.defence = target.tb + armour
-        total.wounds_dealt = max(total.damage_to_armour - total.defence, 0)
+        total.wounds_dealt = max(total.damage_before_armour - total.defence, 0)
 
         if "рубящий" in qualities and armour > 0:
             target.armour[total.location] = armour - 1
@@ -333,9 +333,9 @@ class Combat:
         before = target.wounds
         target.wounds = max(target.wounds - total.wounds_dealt, 0)
         total.wounds_left = target.wounds
-        self.wounds_lost[by_to] = self.wounds_lost.get(by_to, 0) + (before - target.wounds)
+        self.wounds_lost[target_name] = self.wounds_lost.get(target_name, 0) + (before - target.wounds)
         if target.wounds == 0 and before > 0:
-            self.reached_to_zero.add(by_to)
+            self.reached_to_zero.add(target_name)
 
         needs_crit = total.doubles and total.hit
         if before == 0 and total.wounds_dealt > 0:
@@ -349,7 +349,7 @@ class Combat:
                 total.wounds_dealt += extra
                 total.wounds_left = target.wounds
                 total.tags.append("колющий_насквозь")
-                self.wounds_lost[by_to] = self.wounds_lost.get(by_to, 0) + extra
+                self.wounds_lost[target_name] = self.wounds_lost.get(target_name, 0) + extra
         return total
 
     # --- критические ранения ----------------------------------------------
@@ -432,7 +432,7 @@ class Combat:
                         f"осталось Судьбы {combatant.fate}, потолок Удачи теперь "
                         f"{combatant.fortune_max}")
         combatant.dead = True
-        self.counters["смертей"] += 1
+        self.counters["deaths"] += 1
         return f"{name} умирает"
 
     # --- четыре ресурса ----------------------------------------------------
@@ -494,8 +494,8 @@ class Combat:
         fresh = min(combatant.resolve + amount, combatant.resolve_max)
         added = fresh - combatant.resolve
         combatant.resolve = fresh
-        self.counters["решимость_начислена"] = \
-            self.counters.get("решимость_начислена", 0) + added
+        self.counters["resolve_awarded"] = \
+            self.counters.get("resolve_awarded", 0) + added
         return {"success": added > 0, "added": added,
                 "reason": "" if added else "Решимость уже под потолок",
                 "before": before, "after": self.resources(name)}
@@ -544,9 +544,9 @@ class Combat:
         total = {"character": name, "target": target, "rolled": roll, "success": success}
         if not success:
             combatant.unconscious = True
-            total["последствие"] = "потерял сознание, без помощи умрёт"
+            total["consequence"] = "потерял сознание, без помощи умрёт"
         else:
-            total["последствие"] = "держится"
+            total["consequence"] = "держится"
         return total
 
     def restore(self, name: str, amount: int = 1) -> tuple[int, str]:

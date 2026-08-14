@@ -6,99 +6,117 @@ import json
 import re
 import unicodedata
 from pathlib import Path
+import rubric_schema
 
-КРИТЕРИИ = ["сеттинг", "правила", "цель", "тайна", "драма"]
-КРИТЕРИИ_МАСТЕРА = ["загадки", "темп", "честность", "рамка", "травмы", "ружья"]
-ШТРАФЫ = {"вышла из роли": -2, "сыграла за мастера": -3, "схитрила с броском": -5}
+CRITERIA = rubric_schema.CRITERIA_NAMES
+CRITERIA_GM = rubric_schema.CRITERIA_GM
+PENALTIES = {"вышла из роли": -2, "сыграла за мастера": -3, "схитрила с броском": -5}
 
 
-def прочитать_лог(пути: str | Path | list) -> list[dict]:
+def read_log(paths: str | Path | list) -> list[dict]:
     """Один лог или несколько подряд: продолженный прогон лежит в двух файлах."""
-    if isinstance(пути, (str, Path)):
-        пути = [пути]
-    события: list[dict] = []
-    for путь in пути:
-        with Path(путь).open(encoding="utf-8") as ф:
-            for строка in ф:
-                строка = строка.strip()
-                if строка:
-                    события.append(json.loads(строка))
-    return события
+    if isinstance(paths, (str, Path)):
+        paths = [paths]
+    events: list[dict] = []
+    for path in paths:
+        with Path(path).open(encoding="utf-8") as fn:
+            for line in fn:
+                line = line.strip()
+                if line:
+                    events.append(json.loads(line))
+    return events
 
 
-def персонажи(события: list[dict]) -> list[str]:
-    старт = next((е for е in события if е["тип_события"] == "старт"), None)
-    if старт and "состав" in старт:
-        return [имя for имя in старт["состав"] if имя != "Мастер"]
-    имена, порядок = set(), []
-    for е in события:
-        имя = е.get("говорящий")
-        if е["тип_события"] == "ход" and имя and имя not in имена and имя != "Мастер":
-            имена.add(имя)
-            порядок.append(имя)
-    return порядок
+def characters(events: list[dict]) -> list[str]:
+    start_event = next((ev for ev in events if ev.get("event_type") == "старт"), None)
+    if start_event and "состав" in start_event:
+        return [name for name in start_event["cast"] if name != "Мастер"]
+    names, order = set(), []
+    for ev in events:
+        name = ev.get("speaker")
+        if ev.get("event_type") == "ход" and name and name not in names and name != "Мастер":
+            names.add(name)
+            order.append(name)
+    return order
 
 
-def состав(события: list[dict]) -> dict:
+def cast(events: list[dict]) -> dict:
     """Кто на какой модели. Судье это не показывается никогда."""
-    старт = next((е for е in события if е["тип_события"] == "старт"), None)
-    return (старт or {}).get("состав", {})
+    start_event = next((ev for ev in events if ev.get("event_type") == "старт"), None)
+    return (start_event or {}).get("cast", {})
 
 
-def контрольный(события: list[dict]) -> str | None:
-    старт = next((е for е in события if е["тип_события"] == "старт"), None)
-    return (старт or {}).get("контрольный_игрок")
+def control(events: list[dict]) -> str | None:
+    start_event = next((ev for ev in events if ev.get("event_type") == "старт"), None)
+    return (start_event or {}).get("control_player")
 
 
-def выбытия(события: list[dict]) -> dict[str, dict]:
+def down(events: list[dict]) -> dict[str, dict]:
     """Кто когда выбывал и возвращался. Судье это нужно, чтобы не занизить балл."""
-    итог: dict[str, dict] = {}
-    for е in события:
-        тип = е.get("тип_события")
-        if тип == "выбытие":
-            итог.setdefault(е["говорящий"], {"выбытия": [], "возвращения": []})
-            итог[е["говорящий"]]["выбытия"].append(
-                {"круг": е["круг"], "причина": е.get("текст", "")}
+    total: dict[str, dict] = {}
+    for ev in events:
+        kind = ev.get("event_type")
+        if kind == "выбытие":
+            total.setdefault(ev["speaker"], {"down": [], "comebacks": []})
+            total[ev["speaker"]]["down"].append(
+                {"round": ev["round"], "reason": ev.get("text", "")}
             )
-        elif тип == "возвращение":
-            итог.setdefault(е["говорящий"], {"выбытия": [], "возвращения": []})
-            итог[е["говорящий"]]["возвращения"].append(е["круг"])
-    return итог
+        elif kind == "возвращение":
+            total.setdefault(ev["speaker"], {"down": [], "comebacks": []})
+            total[ev["speaker"]]["comebacks"].append(ev["round"])
+    return total
 
 
-def отыграно_кругов(события: list[dict]) -> dict[str, int]:
+def rounds_played(events: list[dict]) -> dict[str, int]:
     """Сколько кругов персонаж реально ходил — по ходам, а не по номеру круга."""
-    счёт: dict[str, int] = {}
-    for е in события:
-        if е.get("тип_события") == "ход" and е.get("говорящий") != "Мастер":
-            счёт[е["говорящий"]] = счёт.get(е["говорящий"], 0) + 1
-    return счёт
+    count: dict[str, int] = {}
+    for ev in events:
+        if ev.get("event_type") == "ход" and ev.get("speaker") != "Мастер":
+            count[ev["speaker"]] = count.get(ev["speaker"], 0) + 1
+    return count
 
 
-def итог_прогона(события: list[dict]) -> dict:
+def is_legacy_format(folder) -> bool:
+    """Прогон в старом формате: ключи лога и конфига по-русски.
+
+    После перехода на латиницу scoring читает только новые прогоны. Старые
+    остаются на диске как есть — материал прошлых выпусков, — но собрать по
+    ним отчёт нельзя, и молча падать с KeyError на этом не годится.
+    """
+    from pathlib import Path
+    config = Path(folder) / "config.json"
+    if config.exists():
+        try:
+            return "мастер" in json.loads(config.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            return False
+    return False
+
+
+def total_run(events: list[dict]) -> dict:
     """Сводит итоги всех частей прогона в один: продолжение — это второй файл."""
-    итоги = [е for е in события if е["тип_события"] == "итог"]
-    if not итоги:
+    totals = [ev for ev in events if ev.get("event_type") == "итог"]
+    if not totals:
         return {}
-    if len(итоги) == 1:
-        return итоги[0]
+    if len(totals) == 1:
+        return totals[0]
 
-    сводный = dict(итоги[-1])
-    сводный["кругов"] = max(и.get("кругов", 0) for и in итоги)
-    сводный["минут"] = round(sum(и.get("минут", 0) for и in итоги), 1)
-    сводный["бросков"] = sum(и.get("бросков", 0) for и in итоги)
-    сводный["стоимость_usd"] = round(sum(и.get("стоимость_usd", 0) for и in итоги), 4)
-    токены: dict[str, int] = {}
-    for и in итоги:
-        for ключ, значение in (и.get("токенов") or {}).items():
-            if isinstance(значение, int):
-                токены[ключ] = токены.get(ключ, 0) + значение
-    сводный["токенов"] = токены
-    сводный["частей"] = len(итоги)
-    return сводный
+    combined = dict(totals[-1])
+    combined["rounds"] = max(i.get("rounds", 0) for i in totals)
+    combined["minutes"] = round(sum(i.get("minutes", 0) for i in totals), 1)
+    combined["rolls"] = sum(i.get("rolls", 0) for i in totals)
+    combined["cost_usd"] = round(sum(i.get("cost_usd", 0) for i in totals), 4)
+    tokens: dict[str, int] = {}
+    for i in totals:
+        for key, value in (i.get("tokens") or {}).items():
+            if isinstance(value, int):
+                tokens[key] = tokens.get(key, 0) + value
+    combined["tokens"] = tokens
+    combined["parts"] = len(totals)
+    return combined
 
 
-def ресурсы(события: list[dict]) -> dict:
+def resources(events: list[dict]) -> dict:
     """Сводка по ресурсам, пересчитанная из сырых событий, а не из итога.
 
     Событие «ресурс» — единственный источник правды: итог считается в конце
@@ -107,217 +125,217 @@ def ресурсы(события: list[dict]) -> dict:
     им и пользуемся, а из итога берём только то, чего в событиях нет:
     остаток на финише и число провалов.
     """
-    сводка: dict[str, dict] = {}
-    из_итога = (итог_прогона(события) or {}).get("ресурсы") or {}
-    for имя, д in из_итога.items():
-        сводка[имя] = {
-            "заявлено": {}, "подтверждено": {}, "решимость_начислена": 0,
-            "провалов_можно_было_перебросить": д.get(
-                "провалов_можно_было_перебросить", 0),
-            "на_финише": д.get("на_финише") or {},
-            "мотивация": д.get("мотивация", ""),
+    summary: dict[str, dict] = {}
+    of_total = (total_run(events) or {}).get("resources") or {}
+    for name, dt in of_total.items():
+        summary[name] = {
+            "claimed": {}, "confirmed": {}, "resolve_awarded": 0,
+            "failures_could_before_reroll": dt.get(
+                "failures_could_before_reroll", 0),
+            "on_finish": dt.get("on_finish") or {},
+            "motivation": dt.get("motivation", ""),
         }
 
-    for е in события:
-        if е.get("тип_события") != "ресурс":
+    for ev in events:
+        if ev.get("event_type") != "ресурс":
             continue
-        строка = сводка.setdefault(е.get("кто", "?"), {
-            "заявлено": {}, "подтверждено": {}, "решимость_начислена": 0,
-            "провалов_можно_было_перебросить": 0, "на_финише": {}, "мотивация": "",
+        line = summary.setdefault(ev.get("who", "?"), {
+            "claimed": {}, "confirmed": {}, "resolve_awarded": 0,
+            "failures_could_before_reroll": 0, "on_finish": {}, "motivation": "",
         })
         # Начисление опознаётся по наличию поля, а не по его величине: у
         # неудавшегося начисления там ноль, и по «если начислено» оно
         # засчитывалось игроку за попытку потратить.
-        начисление = е.get("вид") == "начисление" or "начислено" in е
-        if начисление:
-            строка["решимость_начислена"] += е.get("начислено") or 0
+        award = ev.get("variant") == "начисление" or "начислено" in ev
+        if award:
+            line["resolve_awarded"] += ev.get("awarded") or 0
             continue
-        ресурс = е.get("ресурс", "?")
-        строка["заявлено"][ресурс] = строка["заявлено"].get(ресурс, 0) + 1
-        if е.get("подтверждено"):
-            строка["подтверждено"][ресурс] = строка["подтверждено"].get(ресурс, 0) + 1
-    return сводка
+        resource = ev.get("resource", "?")
+        line["claimed"][resource] = line["claimed"].get(resource, 0) + 1
+        if ev.get("confirmed"):
+            line["confirmed"][resource] = line["confirmed"].get(resource, 0) + 1
+    return summary
 
 
-def круги(события: list[dict]) -> list[int]:
-    номера = sorted({е["круг"] for е in события if е.get("тип_события") == "ход"})
-    return номера
+def rounds(events: list[dict]) -> list[int]:
+    numbers = sorted({ev["round"] for ev in events if ev.get("event_type") == "ход"})
+    return numbers
 
 
-def выбрать_круги(события: list[dict], сколько: int, начало: int | None = None) -> list[int]:
+def choose_rounds(events: list[dict], amount: int, start: int | None = None) -> list[int]:
     """Непрерывная выборка кругов: человеку нужен контекст, а не нарезка вразбивку."""
-    все = [к for к in круги(события) if к > 0]
-    if len(все) <= сколько:
-        return все
-    if начало is None:
+    all_of = [d for d in rounds(events) if d > 0]
+    if len(all_of) <= amount:
+        return all_of
+    if start is None:
         # По центру сессии: завязка уже прошла, развязка ещё не началась.
-        центр = len(все) // 2
-        первый = max(0, центр - сколько // 2)
+        centre = len(all_of) // 2
+        first = max(0, centre - amount // 2)
     else:
-        первый = max(0, все.index(начало) if начало in все else 0)
-    return все[первый: первый + сколько]
+        first = max(0, all_of.index(start) if start in all_of else 0)
+    return all_of[first: first + amount]
 
 
 # --- транскрипт -----------------------------------------------------------
 
-ЗАГОЛОВКИ_КРУГОВ = {0: "Круг 0. Вечер накануне, знакомство у очага"}
+HEADINGS_ROUNDS = {0: "Круг 0. Вечер накануне, знакомство у очага"}
 
 
-def транскрипт(
-    события: list[dict],
+def transcript(
+    events: list[dict],
     *,
-    слепой: bool = True,
-    только_круги: list[int] | None = None,
+    blind: bool = True,
+    only_rounds: list[int] | None = None,
 ) -> str:
     """Читаемый лог. В слепом виде нет ни провайдеров, ни моделей, ни стоимости."""
-    отбор = set(только_круги) if только_круги is not None else None
-    строки: list[str] = ["# ЛОГ СЕССИИ", ""]
+    sample = set(only_rounds) if only_rounds is not None else None
+    lines: list[str] = ["# ЛОГ СЕССИИ", ""]
 
-    if not слепой:
-        строки.append("Состав:")
-        for имя, настройки in состав(события).items():
-            строки.append(f"- {имя}: {настройки.get('провайдер')} / {настройки.get('модель')}")
-        ктрл = контрольный(события)
-        if ктрл:
-            строки.append(f"- контрольный игрок: {ктрл}")
-        строки.append("")
+    if not blind:
+        lines.append("Состав:")
+        for name, settings in cast(events).items():
+            lines.append(f"- {name}: {settings.get('provider')} / {settings.get('model')}")
+        ctrl = control(events)
+        if ctrl:
+            lines.append(f"- контрольный игрок: {ctrl}")
+        lines.append("")
 
-    всего_кругов = max(круги(события) or [0])
-    ушедшие = выбытия(события)
-    сыграно = отыграно_кругов(события)
-    if ушедшие:
-        строки += ["## Кто сколько отыграл", ""]
-        for имя, сколько in сыграно.items():
-            хвост = ""
-            если = ушедшие.get(имя)
-            if если:
-                куски = [f"выбыл в круге {в['круг']} ({в['причина']})"
-                         for в in если["выбытия"]]
-                куски += [f"вернулся в круге {к}" for к in если["возвращения"]]
-                хвост = " — " + "; ".join(куски)
-            строки.append(f"- {имя}: ходов {сколько} из {всего_кругов + 1}{хвост}")
-        строки += [
+    total_of_rounds = max(rounds(events) or [0])
+    spent = down(events)
+    played = rounds_played(events)
+    if spent:
+        lines += ["## Кто сколько отыграл", ""]
+        for name, amount in played.items():
+            tail = ""
+            when = spent.get(name)
+            if when:
+                chunks = [f"выбыл в круге {v['round']} ({v['reason']})"
+                         for v in when["down"]]
+                chunks += [f"вернулся в круге {d}" for d in when["comebacks"]]
+                tail = " — " + "; ".join(chunks)
+            lines.append(f"- {name}: ходов {amount} из {total_of_rounds + 1}{tail}")
+        lines += [
             "",
             "Молчание выбывшего — не игра игрока: его в эти круги не спрашивали.",
             "",
         ]
 
-    текущий = None
-    for е in события:
-        тип = е.get("тип_события")
-        круг = е.get("круг")
-        if тип in ("старт", "итог", "доставка"):
+    current = None
+    for ev in events:
+        kind = ev.get("event_type")
+        round_no = ev.get("round")
+        if kind in ("старт", "итог", "доставка"):
             continue
-        if отбор is not None and круг not in отбор:
+        if sample is not None and round_no not in sample:
             continue
 
-        if круг != текущий:
-            текущий = круг
-            шапка = ЗАГОЛОВКИ_КРУГОВ.get(круг)
-            if шапка is None:
-                событие_круга = next(
-                    (к for к in события
-                     if к.get("тип_события") == "круг" and к.get("круг") == круг),
+        if round_no != current:
+            current = round_no
+            header = HEADINGS_ROUNDS.get(round_no)
+            if header is None:
+                event_round = next(
+                    (d for d in events
+                     if d.get("event_type") == "круг" and d.get("round") == round_no),
                     {},
                 )
-                режим = событие_круга.get("режим", "")
-                порядок = ", ".join(событие_круга.get("порядок", []))
-                шапка = f"Круг {круг}." + (f" Режим: {режим}." if режим else "")
-                шапка += f" Порядок хода: {порядок}." if порядок else ""
-            строки += ["", f"## {шапка}", ""]
+                mode = event_round.get("mode", "")
+                order = ", ".join(event_round.get("order", []))
+                header = f"Круг {round_no}." + (f" Режим: {mode}." if mode else "")
+                header += f" Порядок хода: {order}." if order else ""
+            lines += ["", f"## {header}", ""]
 
-        if тип == "ход":
-            строки.append(_реплика(е))
-        elif тип == "бросок":
-            б = е["бросок"]
-            итог = "успех" if б["успех"] else "провал"
-            строки.append(
-                f"[БРОСОК СКРИПТА] {б['персонаж']}, {б['навык']}, {б['сложность']} — "
-                f"выпало {б['выпало']}, цель {б['цель']}, {итог}, "
-                f"уровней успеха {б['уровни_успеха']:+d}"
+        if kind == "ход":
+            lines.append(_line(ev))
+        elif kind == "бросок":
+            c = ev["roll"]
+            total = "успех" if c["success"] else "провал"
+            lines.append(
+                f"[БРОСОК СКРИПТА] {c['character']}, {c['skill']}, {c['difficulty']} — "
+                f"выпало {c['rolled']}, цель {c['target']}, {total}, "
+                f"уровней успеха {c['success_levels']:+d}"
             )
-        elif тип == "аномалия" and "самоброс" in е.get("метки", []):
-            строки.append(
-                f"[ПОМЕТКА СКРИПТА] {е['говорящий']} назвал число броска сам. "
+        elif kind == "аномалия" and "самоброс" in ev.get("tags", []):
+            lines.append(
+                f"[ПОМЕТКА СКРИПТА] {ev['speaker']} назвал число броска сам. "
                 f"Бросок отклонён, скрипт подставил настоящий."
             )
-        elif тип == "атака":
-            а = е["атака"]
-            куски = [f"[БОЙ] {а['атакующий']} → {а['цель']} ({а['оружие']})"]
-            if а["попадание"]:
-                куски.append(f"{а['локация']}, снято ран {а['ран_снято']}, "
-                             f"осталось {а['ран_осталось']}")
-                if а.get("крит"):
-                    куски.append(f"КРИТ: {а['крит']['текст']}")
-                if а.get("состояния"):
-                    куски.append("состояния: " + ", ".join(а["состояния"]))
-                if а.get("травма"):
-                    куски.append(f"травма: {а['травма']}")
+        elif kind == "атака":
+            at = ev["attack"]
+            chunks = [f"[БОЙ] {at['attacker']} → {at['target']} ({at['weapons']})"]
+            if at["hit"]:
+                chunks.append(f"{at['location']}, снято ран {at['wounds_dealt']}, "
+                             f"осталось {at['wounds_left']}")
+                if at.get("crit"):
+                    chunks.append(f"КРИТ: {at['crit']['text']}")
+                if at.get("conditions"):
+                    chunks.append("состояния: " + ", ".join(at["conditions"]))
+                if at.get("injury"):
+                    chunks.append(f"травма: {at['injury']}")
             else:
-                куски.append("промах")
-            строки.append(". ".join(куски))
-        elif тип == "судьба":
-            строки.append(
-                f"[СУДЬБА] {е['говорящий']}: "
-                + ("потратил, смерть отменена" if е.get("потрачена") else "не потратил")
+                chunks.append("промах")
+            lines.append(". ".join(chunks))
+        elif kind == "судьба":
+            lines.append(
+                f"[СУДЬБА] {ev['speaker']}: "
+                + ("потратил, смерть отменена" if ev.get("spent") else "не потратил")
             )
-        elif тип == "кровотечение":
-            б = е["бросок"]
-            строки.append(f"[КРОВОТЕЧЕНИЕ] {е['говорящий']}: {б['последствие']}")
-        elif тип == "выбытие":
-            строки.append(
-                f"[ВЫБЫЛ ИЗ ИГРЫ] {е['говорящий']}: {е.get('текст','')}. "
+        elif kind == "кровотечение":
+            c = ev["roll"]
+            lines.append(f"[КРОВОТЕЧЕНИЕ] {ev['speaker']}: {c['consequence']}")
+        elif kind == "выбытие":
+            lines.append(
+                f"[ВЫБЫЛ ИЗ ИГРЫ] {ev['speaker']}: {ev.get('text','')}. "
                 "Дальше его ходов не запрашивали."
             )
-        elif тип == "возвращение":
-            строки.append(f"[ВЕРНУЛСЯ В ИГРУ] {е['говорящий']}")
-        elif тип == "финал":
-            строки.append("[МАСТЕР ОБЪЯВИЛ ФИНАЛ]")
+        elif kind == "возвращение":
+            lines.append(f"[ВЕРНУЛСЯ В ИГРУ] {ev['speaker']}")
+        elif kind == "финал":
+            lines.append("[МАСТЕР ОБЪЯВИЛ ФИНАЛ]")
         else:
             continue  # служебные события в транскрипт не идут
-        строки.append("")
+        lines.append("")
 
-    return "\n".join(строки).strip() + "\n"
-
-
-def _реплика(е: dict) -> str:
-    кто = е["говорящий"].upper()
-    видимость = е.get("видимость", "всем")
-    порядок = е.get("порядок_в_круге")
-
-    пометки = []
-    if видимость == "только мастеру":
-        пометки.append("ТАЙНЫЙ ХОД, остальные игроки его не видели")
-    elif видимость.startswith("только "):
-        пометки.append(f"видел только {видимость.removeprefix('только ')}")
-    if кто != "МАСТЕР" and порядок:
-        пометки.append(f"{порядок}-й в круге")
-
-    хвост = f" [{'; '.join(пометки)}]" if пометки else ""
-    return f"{кто}{хвост}: {е.get('текст', '')}"
+    return "\n".join(lines).strip() + "\n"
 
 
-def бой(события: list[dict]) -> dict:
+def _line(ev: dict) -> str:
+    who = ev["speaker"].upper()
+    visibility = ev.get("visibility", "всем")
+    order = ev.get("order_in_round")
+
+    marks = []
+    if visibility == "только мастеру":
+        marks.append("ТАЙНЫЙ ХОД, остальные игроки его не видели")
+    elif visibility.startswith("только "):
+        marks.append(f"видел только {visibility.removeprefix('только ')}")
+    if who != "МАСТЕР" and order:
+        marks.append(f"{order}-й в круге")
+
+    tail = f" [{'; '.join(marks)}]" if marks else ""
+    return f"{who}{tail}: {ev.get('text', '')}"
+
+
+def combat(events: list[dict]) -> dict:
     """Счётчики боя. Берутся из итога прогона, а если его нет — из событий."""
-    итог = итог_прогона(события).get("бой")
-    if итог:
-        return итог
-    атаки = [е for е in события if е.get("тип_события") == "атака"]
-    if not атаки:
+    total = total_run(events).get("combat")
+    if total:
+        return total
+    attacks = [ev for ev in events if ev.get("event_type") == "атака"]
+    if not attacks:
         return {}
-    ран = {}
-    for е in атаки:
-        а = е["атака"]
-        ран[а["цель"]] = ран.get(а["цель"], 0) + а["ран_снято"]
+    wounds = {}
+    for ev in attacks:
+        at = ev["attack"]
+        wounds[at["target"]] = wounds.get(at["target"], 0) + at["wounds_dealt"]
     return {
-        "атак": len(атаки),
-        "попаданий": sum(1 for е in атаки if е["атака"]["попадание"]),
-        "критов": sum(1 for е in атаки if е["атака"].get("крит")),
-        "ран_потеряно": ран,
+        "attacks": len(attacks),
+        "hits": sum(1 for ev in attacks if ev["attack"]["hit"]),
+        "crits": sum(1 for ev in attacks if ev["attack"].get("crit")),
+        "wounds_lost": wounds,
     }
 
 
-def разгон(события: list[dict]) -> list[dict]:
+def growth(events: list[dict]) -> list[dict]:
     """Размер контекста и время круга — цифры для статьи.
 
     Контекст меряется токенами на **одного агента**: только эта цифра говорит,
@@ -333,77 +351,77 @@ def разгон(события: list[dict]) -> list[dict]:
     агентов для разговорного круга совпала бы с ним, а для параллельного
     завысила бы вчетверо.
     """
-    по_кругам: dict[int, dict] = {}
-    конец: dict[int, float] = {}
-    for е in события:
-        круг = е.get("круг")
-        if круг is None:
+    by_rounds: dict[int, dict] = {}
+    end: dict[int, float] = {}
+    for ev in events:
+        round_no = ev.get("round")
+        if round_no is None:
             continue
-        конец[круг] = max(конец.get(круг, 0.0), е.get("секунд_от_старта") or 0.0)
-        if е.get("тип_события") != "ход" or not (
-            е.get("контекст_символов") or е.get("токены")
+        end[round_no] = max(end.get(round_no, 0.0), ev.get("seconds_from_start") or 0.0)
+        if ev.get("event_type") != "ход" or not (
+            ev.get("context_chars") or ev.get("tokens")
         ):
             continue
-        строка = по_кругам.setdefault(
-            круг, {"круг": круг, "новых_символов": 0, "токенов_всего": 0,
-                   "контекст_агента": 0, "у_кого": "", "секунд": 0.0}
+        line = by_rounds.setdefault(
+            round_no, {"round": round_no, "fresh_chars": 0, "tokens_total_of": 0,
+                   "context_agent": 0, "у_кого": "", "seconds": 0.0}
         )
-        строка["новых_символов"] += е.get("контекст_символов") or 0
-        токены = е.get("токены") or {}
-        всего = sum(
-            токены.get(к, 0) or 0
-            for к in ("input_tokens", "cache_read_input_tokens",
+        line["fresh_chars"] += ev.get("context_chars") or 0
+        tokens = ev.get("tokens") or {}
+        total_of = sum(
+            tokens.get(d, 0) or 0
+            for d in ("input_tokens", "cache_read_input_tokens",
                       "cache_creation_input_tokens")
         )
-        строка["токенов_всего"] += всего
-        на_вызов = всего // max(е.get("ответов_в_сцене") or 1, 1)
-        if на_вызов > строка["контекст_агента"]:
-            строка["контекст_агента"] = на_вызов
-            строка["у_кого"] = е.get("говорящий", "")
+        line["tokens_total_of"] += total_of
+        on_call = total_of // max(ev.get("replies_v_scene") or 1, 1)
+        if on_call > line["context_agent"]:
+            line["context_agent"] = on_call
+            line["у_кого"] = ev.get("speaker", "")
 
-    предыдущий = 0.0
-    for круг in sorted(по_кругам):
-        по_кругам[круг]["секунд"] = round(max(конец.get(круг, 0.0) - предыдущий, 0.0), 1)
-        предыдущий = конец.get(круг, предыдущий)
-    return [по_кругам[к] for к in sorted(по_кругам)]
+    previous = 0.0
+    for round_no in sorted(by_rounds):
+        by_rounds[round_no]["seconds"] = round(max(end.get(round_no, 0.0) - previous, 0.0), 1)
+        previous = end.get(round_no, previous)
+    return [by_rounds[d] for d in sorted(by_rounds)]
 
 
 # --- цитаты ---------------------------------------------------------------
 
-def _нормализовать(текст: str) -> str:
-    текст = unicodedata.normalize("NFKC", текст or "").lower().replace("ё", "е")
-    текст = re.sub(r"[^\w\s]", " ", текст)
-    return re.sub(r"\s+", " ", текст).strip()
+def _normalise(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text or "").lower().replace("ё", "е")
+    text = re.sub(r"[^\w\s]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
-def проверить_цитату(события: list[dict], круг: int | None, цитата: str) -> str:
+def check_quote(events: list[dict], round_no: int | None, quote: str) -> str:
     """«в круге», «в логе», «частично» или «не найдена».
 
     Балл без цитаты не засчитывается — значит, цитату надо уметь проверить.
     «Частично» — судья склеил куски разных предложений, но каждый кусок в логе
     есть. Это не выдумка, засчитываем с пометкой. Выдумку не засчитываем.
     """
-    иголка = _нормализовать(цитата)
-    if len(иголка) < 12:
+    needle = _normalise(quote)
+    if len(needle) < 12:
         return "не найдена"
 
-    тексты = [
-        (е.get("круг"), _нормализовать(е.get("текст", "")))
-        for е in события if е.get("тип_события") in ("ход", "аномалия")
+    texts = [
+        (ev.get("round"), _normalise(ev.get("text", "")))
+        for ev in events if ev.get("event_type") in ("ход", "аномалия")
     ]
 
-    везде = ""
-    for номер, стог in тексты:
-        if иголка in стог:
-            if круг is not None and номер == круг:
+    everywhere = ""
+    for index, haystack in texts:
+        if needle in haystack:
+            if round_no is not None and index == round_no:
                 return "в круге"
-            везде = "в логе"
-    if везде:
-        return везде
+            everywhere = "в логе"
+    if everywhere:
+        return everywhere
 
-    куски = [к for к in re.split(r"[.!?…]+", цитата) if len(_нормализовать(к)) >= 20]
-    if куски and all(
-        any(_нормализовать(кусок) in стог for _, стог in тексты) for кусок in куски
+    chunks = [d for d in re.split(r"[.!?…]+", quote) if len(_normalise(d)) >= 20]
+    if chunks and all(
+        any(_normalise(chunk) in haystack for _, haystack in texts) for chunk in chunks
     ):
         return "частично"
     return "не найдена"
@@ -411,14 +429,14 @@ def проверить_цитату(события: list[dict], круг: int | 
 
 # --- разбор ответа судьи ---------------------------------------------------
 
-def вынуть_json(текст: str) -> dict:
+def extract_json(text: str) -> dict:
     """Судья иногда оборачивает JSON в текст или в тройные кавычки."""
-    в_кавычках = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", текст, re.DOTALL)
-    кандидат = в_кавычках.group(1) if в_кавычках else None
-    if кандидат is None:
-        начало = текст.find("{")
-        конец = текст.rfind("}")
-        if начало < 0 or конец <= начало:
+    v_quotes = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    candidate = v_quotes.group(1) if v_quotes else None
+    if candidate is None:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
             raise ValueError("в ответе судьи нет JSON")
-        кандидат = текст[начало: конец + 1]
-    return json.loads(кандидат)
+        candidate = text[start: end + 1]
+    return json.loads(candidate)
