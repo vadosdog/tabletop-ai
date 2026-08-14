@@ -10,28 +10,35 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-РЕЖИМЫ = ("РАЗГОВОР", "ДЕЙСТВИЕ")
+from . import protocol
 
-_ТЕГ_РЕЖИМА = re.compile(r"\[\s*РЕЖИМ\s*:\s*(РАЗГОВОР|ДЕЙСТВИЕ)\s*\]", re.IGNORECASE)
-_ТЕГ_ФИНАЛА = re.compile(r"\[\s*ФИНАЛ\s*\]", re.IGNORECASE)
+# Русские слова протокола — из protocol.py. Здесь только то, как они обёрнуты
+# в разметку: скобки, двоеточия, звёздочки markdown, которыми модель их метит.
+РЕЖИМЫ = protocol.MODES
+
+_ТЕГ_РЕЖИМА = re.compile(
+    rf"\[\s*{protocol.TAG_MODE}\s*:\s*({'|'.join(protocol.MODES)})\s*\]", re.IGNORECASE
+)
+_ТЕГ_ФИНАЛА = re.compile(rf"\[\s*{protocol.TAG_FINALE}\s*\]", re.IGNORECASE)
 _ТЕГ_ВЫБЫЛ = re.compile(
-    r"\[\s*ВЫБЫЛ\s*:\s*(?P<имя>[^,\]]+?)\s*(?:,\s*(?P<причина>[^\]]+?))?\s*\]",
+    rf"\[\s*{protocol.TAG_DOWN}\s*:\s*(?P<имя>[^,\]]+?)\s*(?:,\s*(?P<причина>[^\]]+?))?\s*\]",
     re.IGNORECASE,
 )
 _ТЕГ_ВЕРНУЛСЯ = re.compile(
-    r"\[\s*ВЕРНУЛСЯ\s*:\s*(?P<имя>[^,\]]+?)\s*(?:,[^\]]*)?\]", re.IGNORECASE
+    rf"\[\s*{protocol.TAG_BACK}\s*:\s*(?P<имя>[^,\]]+?)\s*(?:,[^\]]*)?\]", re.IGNORECASE
 )
 _СТРОКА_ПРОВЕРКИ = re.compile(
-    r"^[ \t>*_]*ПРОВЕРКА[ \t]*[*_]*[ \t]*:[ \t]*(?P<тело>.+?)[ \t]*$",
+    rf"^[ \t>*_]*{protocol.LINE_CHECK}[ \t]*[*_]*[ \t]*:[ \t]*(?P<тело>.+?)[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
 )
 _ЗАГОЛОВОК_ЛИЧНОГО = re.compile(
-    r"^[ \t>*_#]*ТОЛЬКО[ \t]+ДЛЯ[ \t]*:?[ \t]*\[?[ \t]*(?P<имя>[А-ЯЁа-яё]+)[^\n]*$",
+    r"^[ \t>*_#]*" + r"[ \t]+".join(protocol.HEADER_PRIVATE.split())
+    + r"[ \t]*:?[ \t]*\[?[ \t]*(?P<имя>[А-ЯЁа-яё]+)[^\n]*$",
     re.IGNORECASE | re.MULTILINE,
 )
-_ТАЙНО = re.compile(r"^[ \t>*_#]*ТАЙНО\b[ \t]*:?", re.IGNORECASE)
+_ТАЙНО = re.compile(rf"^[ \t>*_#]*{protocol.MARK_SECRET}\b[ \t]*:?", re.IGNORECASE)
 _СТРОКА_АТАКИ = re.compile(
-    r"^[ \t>*_]*АТАКА[ \t]*[*_]*[ \t]*:[ \t]*(?P<тело>.+?)[ \t]*$",
+    rf"^[ \t>*_]*{protocol.LINE_ATTACK}[ \t]*[*_]*[ \t]*:[ \t]*(?P<тело>.+?)[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
 )
 _СТРЕЛКА = re.compile(r"\s*(?:→|->|–>|=>|➔)\s*")
@@ -69,7 +76,7 @@ class Проверка:
     база: int | None = None   # мастер задал целевое число NPC прямо в строке
 
 
-def режим(текст: str, по_умолчанию: str = "РАЗГОВОР") -> tuple[str, bool]:
+def режим(текст: str, по_умолчанию: str = protocol.TALK) -> tuple[str, bool]:
     """Последний тег режима в реплике. Второе значение — был ли тег вообще."""
     найдено = _ТЕГ_РЕЖИМА.findall(текст)
     if not найдено:
@@ -217,24 +224,24 @@ def разделить_личное(текст: str) -> tuple[str, dict[str, str
 # «ТРАЧУ УДАЧУ» в ходе игрока. Допускаем падежи и разделители: модель пишет
 # то «ТРАЧУ УДАЧУ», то «Трачу Удачу,», то «трачу решимость —».
 _ТРАТА = re.compile(
-    r"\bтрач[уy]\s+(?P<ресурс>удач\w*|решимост\w*|стойкост\w*|судьб\w*)",
+    rf"\bтрач[уy]\s+(?P<ресурс>{protocol.alternation(protocol.RESOURCE_STEMS)})",
     re.IGNORECASE,
 )
 
 # «[РЕШИМОСТЬ: Ханна, +1, вступилась за Йорга против патруля]»
 _ТЕГ_РЕШИМОСТЬ = re.compile(
-    r"\[\s*РЕШИМОСТЬ\s*:\s*(?P<имя>[^,\]]+)\s*,\s*\+?(?P<сколько>\d+)\s*"
+    rf"\[\s*{protocol.TAG_RESOLVE}\s*:\s*(?P<имя>[^,\]]+)\s*,\s*\+?(?P<сколько>\d+)\s*"
     r"(?:,\s*(?P<причина>[^\]]*))?\]",
     re.IGNORECASE,
 )
 
-_РЕСУРС_К_ИМЕНИ = {"удач": "удача", "решимост": "решимость",
-                   "стойкост": "стойкость", "судьб": "судьба"}
+_РЕСУРС_К_ИМЕНИ = protocol.RESOURCE_STEMS
 
 
 # «ТРАЧУ СУДЬБУ, беру 01» — игрок в безнадёжном положении называет значение сам.
 _ВЫБРАННОЕ_ЧИСЛО = re.compile(
-    r"трач[уy]\s+судьб\w*[^.\n]{0,40}?\b(?P<число>100|\d{1,2})\b", re.IGNORECASE)
+    rf"трач[уy]\s+{protocol.STEM_FATE}\w*[^.\n]{{0,40}}?\b(?P<число>100|\d{{1,2}})\b",
+    re.IGNORECASE)
 
 
 # Слово, в котором кириллица перемешана с латиницей. Самая коварная порча

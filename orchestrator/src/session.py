@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import parse
+from . import protocol
 from .combat import Боевка
 from .dice import Кубики
 from .logbook import Журнал
@@ -19,7 +20,7 @@ from .prompts import Промпты
 from .providers import настройки as параметры_генерации
 from .providers.base import Ответ, Провайдер, Сессия
 
-МАСТЕР = "Мастер"
+МАСТЕР = protocol.GM
 
 
 class ОстановкаПрогона(RuntimeError):
@@ -62,7 +63,7 @@ class Прогон:
         self.очередь.update({имя: [] for имя in self.имена})
 
         self.круг = 0
-        self.режим = конфиг.get("режим_по_умолчанию", "РАЗГОВОР")
+        self.режим = конфиг.get("режим_по_умолчанию", protocol.DEFAULT_MODE)
         self.разговорных_кругов = 0
         self.остановка: str | None = None
         # Выбывший — это мёртвый, без сознания или тот, чья история кончилась.
@@ -406,7 +407,7 @@ class Прогон:
         база = [имя for имя in self.конфиг["базовый_порядок"] if имя in self.активные]
         if not база:
             return []
-        if self.режим != "РАЗГОВОР":
+        if self.режим != protocol.TALK:
             return база
         # Ротация: иначе тот, кто всегда ходит последним, видит троих и
         # выглядит умнее — это исказило бы скоринг.
@@ -417,7 +418,7 @@ class Прогон:
     async def _собрать_ходы(self, порядок: list[str]) -> list[Ход]:
         ходы: list[Ход] = []
 
-        if self.режим == "РАЗГОВОР":
+        if self.режим == protocol.TALK:
             for номер, имя in enumerate(порядок, 1):
                 ответ = await self.спросить(имя, "Твой ход.")
                 ход = self._разобрать_ход(имя, ответ, номер)
@@ -732,7 +733,7 @@ class Прогон:
         self.счётчики[МАСТЕР]["ходов"] += 1
         self.счётчики[МАСТЕР]["символов"] += len(полный)
 
-        режим, был_тег = parse.режим(полный, self.конфиг.get("режим_по_умолчанию", "РАЗГОВОР"))
+        режим, был_тег = parse.режим(полный, self.конфиг.get("режим_по_умолчанию", protocol.DEFAULT_MODE))
         # На финальной сцене тег режима уже не нужен, аномалией это не считаем.
         не_тег = not был_тег and not parse.объявлен_финал(полный)
         if не_тег:

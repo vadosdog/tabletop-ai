@@ -26,6 +26,7 @@ from pathlib import Path
 КОРЕНЬ = Path(__file__).resolve().parent
 sys.path.insert(0, str(КОРЕНЬ))
 
+from src import protocol  # noqa: E402
 from src.dice import Кубики  # noqa: E402
 from src.logbook import Журнал  # noqa: E402
 from src.combat import Боевка  # noqa: E402
@@ -238,7 +239,7 @@ async def прогнать(конфиг: dict, аргументы) -> Прого
         await прогон.подготовить()
         if аргументы.указание:
             прогон.доставить(
-                "Мастер", f"СЛУЖЕБНОЕ. {аргументы.указание}", "скрипт"
+                protocol.GM, f"СЛУЖЕБНОЕ. {аргументы.указание}", "скрипт"
             )
 
         if аргументы.continue_from:
