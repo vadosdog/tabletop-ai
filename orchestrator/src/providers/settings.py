@@ -17,10 +17,10 @@ from dataclasses import asdict, dataclass, field
 
 # Провайдер → переменная окружения с ключом. Claude идёт по подписке, ключа не
 # просит: у него в этой таблице пусто, и проверка его пропускает.
-КЛЮЧИ: dict[str, str | None] = {
+KEYS: dict[str, str | None] = {
     "claude": None,
     "stub": None,
-    "заглушка": None,
+    "stub": None,
     "openai": "OPENAI_API_KEY",
     "gemini": "GEMINI_API_KEY",
     "xai": "XAI_API_KEY",
@@ -31,7 +31,7 @@ from dataclasses import asdict, dataclass, field
 # Gemini и Grok этого не умеют, минимум у обоих — «low». Значит выравниваемся по
 # нижней общей ступени. Одно и то же слово у разных вендоров означает разное
 # число токенов — это записано в РАСХОЖДЕНИЯ и уходит в отчёт.
-РАЗМЫШЛЕНИЕ: dict[str, dict[str, str]] = {
+REASONING: dict[str, dict[str, str]] = {
     "claude": {"выкл": "low", "low": "low", "medium": "medium", "high": "high"},
     "openai": {"выкл": "none", "low": "low", "medium": "medium", "high": "high"},
     "gemini": {"выкл": "low", "low": "low", "medium": "medium", "high": "high"},
@@ -45,7 +45,7 @@ from dataclasses import asdict, dataclass, field
 # это не отговорки, а те самые «известные расхождения», без которых блок
 # параметров в отчёте был бы враньём. Проверка возможностей (проверка.py)
 # дописывает сюда то, что выяснила живым запросом.
-РАСХОЖДЕНИЯ: dict[str, list[str]] = {
+DISCREPANCIES: dict[str, list[str]] = {
     "claude": [
         "температура, top_p и лимит ответа подписочным Agent SDK не задаются: "
         "в ClaudeAgentOptions таких полей нет. Идут вендорские умолчания "
@@ -102,13 +102,13 @@ from dataclasses import asdict, dataclass, field
 
 
 @dataclass(frozen=True)
-class Параметры:
+class GenerationParams:
     """Одно и то же у всех четырёх игроков. Меняется только целиком."""
 
     # 1.0 — не произвольный выбор, а единственное значение, которое одновременно
     # является умолчанием у всех четырёх вендоров и рекомендованным режимом
     # Gemini. Любое другое пришлось бы выставлять троим и не выставлять Claude.
-    температура: float | None = 1.0
+    temperature: float | None = 1.0
     top_p: float | None = None          # не задаём никому: у Claude не задаётся
     # Промпт просит ≤5 предложений, то есть сотни две токенов текста. Остальное —
     # запас под размышление: лимит считает его вместе с видимым текстом.
@@ -118,114 +118,114 @@ class Параметры:
     # дорастёт до ~67 тыс. — ещё в шестнадцать раз, — и даже при затухающем
     # росте 8000 может не хватить. Неиспользованный запас не стоит ничего:
     # платят за выданные токены, а не за потолок. Обрыв на полуслове стоит хода.
-    предел_ответа: int = 16000
-    размышление: str = "low"            # ключ в таблице РАЗМЫШЛЕНИЕ
-    таймаут_с: float = 300.0            # длинный ход бывает медленным, рубить рано нельзя
-    попыток: int = 4                    # только на сеть и частотные лимиты, не на отказы
-    пауза_с: float = 2.0                # первая пауза, дальше удвоение
-    предел_паузы_с: float = 60.0
+    max_output: int = 16000
+    reasoning: str = "low"            # ключ в таблице РАЗМЫШЛЕНИЕ
+    timeout_s: float = 300.0            # длинный ход бывает медленным, рубить рано нельзя
+    attempts: int = 4                    # только на сеть и частотные лимиты, не на отказы
+    pause_s: float = 2.0                # первая пауза, дальше удвоение
+    limit_pause_s: float = 60.0
 
-    def уровень(self, провайдер: str) -> str | None:
+    def level(self, provider: str) -> str | None:
         """Уровень размышления словом этого вендора."""
-        таблица = РАЗМЫШЛЕНИЕ.get(провайдер)
-        return таблица.get(self.размышление) if таблица else None
+        table = REASONING.get(provider)
+        return table.get(self.reasoning) if table else None
 
-    def словарь(self) -> dict:
+    def mapping(self) -> dict:
         return asdict(self)
 
 
 @dataclass
-class ОтчётОКлючах:
-    найденные: dict[str, str] = field(default_factory=dict)   # провайдер → хвост ключа
-    без_ключа: list[str] = field(default_factory=list)        # провайдеры на подписке
+class KeyReport:
+    found: dict[str, str] = field(default_factory=dict)   # провайдер → хвост ключа
+    without_key: list[str] = field(default_factory=list)        # провайдеры на подписке
 
 
-def _хвост(ключ: str) -> str:
+def _tail(key: str) -> str:
     """Опознавательный знак ключа, по которому его нельзя восстановить."""
-    return f"…{ключ[-4:]} ({len(ключ)} знаков)"
+    return f"…{key[-4:]} ({len(key)} знаков)"
 
 
-def проверить_ключи(провайдеры: set[str] | list[str]) -> ОтчётОКлючах:
+def check_keys(providers: set[str] | list[str]) -> KeyReport:
     """Падает при старте, если ключа нет. Падать на двадцатом круге — худшее.
 
     Проверяются только те провайдеры, которые реально заняты в этом прогоне:
     дым-тест на одном вендоре не должен требовать ключей от трёх остальных.
     """
-    отчёт = ОтчётОКлючах()
-    нет: list[str] = []
+    report = KeyReport()
+    none: list[str] = []
 
-    for имя in sorted(set(провайдеры)):
-        if имя not in КЛЮЧИ:
+    for name in sorted(set(providers)):
+        if name not in KEYS:
             raise SystemExit(
-                f"провайдер {имя!r} не знает, откуда брать ключ; "
-                f"известны: {', '.join(sorted(КЛЮЧИ))}"
+                f"провайдер {name!r} не знает, откуда брать ключ; "
+                f"известны: {', '.join(sorted(KEYS))}"
             )
-        переменная = КЛЮЧИ[имя]
-        if переменная is None:
-            отчёт.без_ключа.append(имя)
+        var = KEYS[name]
+        if var is None:
+            report.without_key.append(name)
             continue
-        значение = (os.environ.get(переменная) or "").strip()
-        if not значение:
-            нет.append(f"  {имя:8} → {переменная}")
+        value = (os.environ.get(var) or "").strip()
+        if not value:
+            none.append(f"  {name:8} → {var}")
         else:
-            отчёт.найденные[имя] = _хвост(значение)
+            report.found[name] = _tail(value)
 
-    if нет:
+    if none:
         raise SystemExit(
             "не хватает ключей в окружении:\n"
-            + "\n".join(нет)
+            + "\n".join(none)
             + "\n\nПоложить их в файл только для ключей и подтянуть перед прогоном:\n"
             "  touch ~/.нри-ключи && chmod 600 ~/.нри-ключи\n"
             "  echo 'export OPENAI_API_KEY=\"...\"' >> ~/.нри-ключи\n"
             "  source ~/.нри-ключи\n"
             "В конфиг ключи не класть: он копируется в папку прогона и уходит в репозиторий."
         )
-    return отчёт
+    return report
 
 
-def ключ(провайдер: str) -> str:
+def key(provider: str) -> str:
     """Ключ провайдера. Наличие уже проверено при старте, здесь только выдача."""
-    переменная = КЛЮЧИ.get(провайдер)
-    if переменная is None:
-        raise RuntimeError(f"провайдеру {провайдер!r} ключ не положен")
-    значение = (os.environ.get(переменная) or "").strip()
-    if not значение:
-        raise RuntimeError(f"{переменная} пуста, а проверка при старте это пропустила")
-    return значение
+    var = KEYS.get(provider)
+    if var is None:
+        raise RuntimeError(f"провайдеру {provider!r} ключ не положен")
+    value = (os.environ.get(var) or "").strip()
+    if not value:
+        raise RuntimeError(f"{var} пуста, а проверка при старте это пропустила")
+    return value
 
 
-def блок_параметров(
-    параметры: Параметры,
-    провайдеры: dict[str, str],
-    добытые_расхождения: dict[str, list[str]] | None = None,
+def block_params(
+    params: GenerationParams,
+    providers: dict[str, str],
+    observed_discrepancies: dict[str, list[str]] | None = None,
 ) -> dict:
     """Блок «условия равные» для лога и отчёта.
 
     `провайдеры` — кто за кем: персонаж → провайдер. Расхождения складываются из
     заранее известных и тех, что выяснила проверка возможностей живым запросом.
     """
-    занятые = sorted(set(провайдеры.values()))
-    расхождения: dict[str, list[str]] = {}
-    for имя in занятые:
-        строки = list(РАСХОЖДЕНИЯ.get(имя, []))
-        строки += list((добытые_расхождения or {}).get(имя, []))
-        if строки:
-            расхождения[имя] = строки
+    taken = sorted(set(providers.values()))
+    discrepancies: dict[str, list[str]] = {}
+    for name in taken:
+        lines = list(DISCREPANCIES.get(name, []))
+        lines += list((observed_discrepancies or {}).get(name, []))
+        if lines:
+            discrepancies[name] = lines
 
     return {
-        "задано_всем": {
-            "температура": параметры.температура,
-            "top_p": параметры.top_p,
-            "предел_ответа_токенов": параметры.предел_ответа,
-            "размышление": параметры.размышление,
-            "таймаут_с": параметры.таймаут_с,
-            "попыток": параметры.попыток,
+        "given_everyone": {
+            "temperature": params.temperature,
+            "top_p": params.top_p,
+            "max_output_tokens": params.max_output,
+            "reasoning": params.reasoning,
+            "timeout_s": params.timeout_s,
+            "attempts": params.attempts,
         },
         "размышление_словами_вендора": {
-            имя: параметры.уровень(имя) for имя in занятые
+            name: params.level(name) for name in taken
         },
-        "состав": провайдеры,
-        "известные_расхождения": расхождения,
+        "cast": providers,
+        "known_discrepancies": discrepancies,
         "оговорка_о_детерминизме":
             "Броски воспроизводятся по зерну: то же зерно даёт ту же последовательность. "
             "Реплики моделей не воспроизводятся ни у одного из четырёх вендоров, даже при "

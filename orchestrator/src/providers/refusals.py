@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass
 
 # Сигналы самих API: тут гадать не о чем, вендор сказал прямо.
-ЖЁСТКИЕ_СИГНАЛЫ = {
+HARD_SIGNALS = {
     "content_filter":       "фильтр содержимого (OpenAI)",
     "refusal":              "модель отказалась явно",
     "SAFETY":               "фильтр безопасности (Gemini)",
@@ -33,7 +33,7 @@ from dataclasses import dataclass
 }
 
 # Разрыв рамки: персонаж XV века не рассуждает о языковых моделях и политиках.
-РАМКА = re.compile(
+FRAME = re.compile(
     r"как\s+(?:языкова\w+\s+)?(?:модель|ии|нейросет\w+|ассистент\w*)"
     r"|я\s+(?:—\s*)?(?:языкова\w+\s+модель|ии|нейросет\w+|ассистент\w*)"
     r"|искусственн\w+\s+интеллект"
@@ -46,7 +46,7 @@ from dataclasses import dataclass
 )
 
 # Мета-отказ: отказ не персонажа от действия, а модели от сцены.
-МЕТА_ОТКАЗ = re.compile(
+META_REFUSAL = re.compile(
     r"(?:не\s+могу|не\s+буду|не\s+стану|отказыва\w+)\s+"
     r"(?:\w+\s+){0,3}?"
     r"(?:продолж\w+|участв\w+|отыгр\w+|описыв\w+|изобра\w+|генерир\w+|"
@@ -59,7 +59,7 @@ from dataclasses import dataclass
 )
 
 # Нравоучение вместо хода: разговор о вреде вместо реплики персонажа.
-НРАВОУЧЕНИЕ = re.compile(
+MORALISING = re.compile(
     r"\b(?:насил\w+|жесток\w+|травмирующ\w+|чувствительн\w+\s+тем\w+|"
     r"этическ\w+|неэтичн\w+|вред\w+\s+содержим\w+)\b"
     r".{0,200}?\b(?:вместо\s+этого|давайте|предлага\w+|рекоменду\w+|"
@@ -67,74 +67,74 @@ from dataclasses import dataclass
     re.IGNORECASE | re.DOTALL,
 )
 
-КИРИЛЛИЦА = re.compile(r"[а-яёА-ЯЁ]")
-ЛАТИНИЦА = re.compile(r"[a-zA-Z]")
+CYRILLIC = re.compile(r"[а-яёА-ЯЁ]")
+LATIN = re.compile(r"[a-zA-Z]")
 
 
 @dataclass
-class Отказ:
-    уверенность: str      # «отказ» — не сомневаемся, «подозрение» — нужны глаза
-    причина: str
-    цитата: str
+class Refusal:
+    confidence: str      # «отказ» — не сомневаемся, «подозрение» — нужны глаза
+    reason: str
+    quote: str
 
     @property
-    def уверенный(self) -> bool:
-        return self.уверенность == "отказ"
+    def confident(self) -> bool:
+        return self.confidence == "отказ"
 
-    def словарь(self) -> dict:
-        return {"уверенность": self.уверенность, "причина": self.причина,
-                "цитата": self.цитата}
-
-
-def _цитата(текст: str, предел: int = 300) -> str:
-    сжато = " ".join(текст.split())
-    return сжато[:предел] + ("…" if len(сжато) > предел else "")
+    def mapping(self) -> dict:
+        return {"confidence": self.confidence, "reason": self.reason,
+                "quote": self.quote}
 
 
-def распознать(текст: str, сигнал: str | None = None) -> Отказ | None:
+def _quote(text: str, limit: int = 300) -> str:
+    compact = " ".join(text.split())
+    return compact[:limit] + ("…" if len(compact) > limit else "")
+
+
+def recognise(text: str, signal: str | None = None) -> Refusal | None:
     """Отказ, подозрение или ничего.
 
     `сигнал` — то, что сказал сам API: finish_reason, поле refusal, причина
     блокировки. Ему верим без оговорок.
     """
-    if сигнал:
-        причина = ЖЁСТКИЕ_СИГНАЛЫ.get(сигнал, f"сигнал API: {сигнал}")
-        return Отказ("отказ", причина, _цитата(текст) or "(пустой ответ)")
+    if signal:
+        reason = HARD_SIGNALS.get(signal, f"сигнал API: {signal}")
+        return Refusal("отказ", reason, _quote(text) or "(пустой ответ)")
 
-    очищенный = текст.strip()
-    if not очищенный:
+    cleaned = text.strip()
+    if not cleaned:
         return None   # пустой ответ — своя история, разбирается не здесь
 
-    рамка = bool(РАМКА.search(очищенный))
-    мета = bool(МЕТА_ОТКАЗ.search(очищенный))
+    frame = bool(FRAME.search(cleaned))
+    meta = bool(META_REFUSAL.search(cleaned))
 
     # Игра идёт по-русски. Ответ латиницей сам по себе — сбой языка, а не отказ:
     # в третьем прогоне Grok на двадцать четвёртом круге написал нормальный ход
     # по роли, но по-английски, и прежнее правило выбросило законную реплику из
     # игры. Зато латиница ВМЕСТЕ с маркерами отказа — это уже вендорская
     # отписка, а не отыгрыш: русский персонаж не говорит «I cannot continue».
-    кириллицы = len(КИРИЛЛИЦА.findall(очищенный))
-    латиницы = len(ЛАТИНИЦА.findall(очищенный))
-    чужой_язык = латиницы > 20 and латиницы > кириллицы * 3
+    cyrillic_count = len(CYRILLIC.findall(cleaned))
+    latin_count = len(LATIN.findall(cleaned))
+    foreign_language = latin_count > 20 and latin_count > cyrillic_count * 3
 
-    if рамка and мета:
-        return Отказ("отказ", "разрыв рамки и прямой отказ от сцены", _цитата(очищенный))
-    if рамка:
-        return Отказ("отказ", "разрыв рамки: модель говорит о себе, а не о персонаже",
-                     _цитата(очищенный))
-    if мета and чужой_язык:
-        return Отказ("отказ", "отказ от сцены на чужом языке — служебный текст, "
-                     "а не отыгрыш", _цитата(очищенный))
-    if мета:
-        return Отказ("подозрение", "отказ от сцены без разрыва рамки — "
-                     "возможно, персонаж отказывается по роли", _цитата(очищенный))
-    if чужой_язык:
-        return Отказ("не_по_русски", "ход написан не по-русски — это сбой языка, "
+    if frame and meta:
+        return Refusal("отказ", "разрыв рамки и прямой отказ от сцены", _quote(cleaned))
+    if frame:
+        return Refusal("отказ", "разрыв рамки: модель говорит о себе, а не о персонаже",
+                     _quote(cleaned))
+    if meta and foreign_language:
+        return Refusal("отказ", "отказ от сцены на чужом языке — служебный текст, "
+                     "а не отыгрыш", _quote(cleaned))
+    if meta:
+        return Refusal("подозрение", "отказ от сцены без разрыва рамки — "
+                     "возможно, персонаж отказывается по роли", _quote(cleaned))
+    if foreign_language:
+        return Refusal("не_по_русски", "ход написан не по-русски — это сбой языка, "
                      "а не отказ: реплика доставляется как есть",
-                     _цитата(очищенный))
+                     _quote(cleaned))
 
-    if НРАВОУЧЕНИЕ.search(очищенный):
-        return Отказ("подозрение", "похоже на нравоучение вместо хода",
-                     _цитата(очищенный))
+    if MORALISING.search(cleaned):
+        return Refusal("подозрение", "похоже на нравоучение вместо хода",
+                     _quote(cleaned))
 
     return None

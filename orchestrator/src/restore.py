@@ -15,9 +15,9 @@ from dataclasses import dataclass, field
 
 from . import protocol
 
-МАСТЕР = protocol.GM
+GM = protocol.GM
 
-ШАПКА_ИГРОКУ = """# ЧТО БЫЛО РАНЬШЕ
+HEADER_PLAYER = """# ЧТО БЫЛО РАНЬШЕ
 
 Эта сессия уже идёт. Ниже — всё, что ты видел и говорил, от первого вечера до
 последней сцены. Твои собственные реплики помечены «ТЫ». Остальное — то, что
@@ -28,7 +28,7 @@ from . import protocol
 здоровайся заново. Просто играй дальше.
 """
 
-ШАПКА_МАСТЕРУ = """# ЧТО БЫЛО РАНЬШЕ
+HEADER_GM = """# ЧТО БЫЛО РАНЬШЕ
 
 Эта сессия уже идёт. Ниже — весь ход игры: ходы игроков, тайные ходы, твои
 сцены и результаты бросков. Твои собственные сцены помечены «ТЫ».
@@ -39,95 +39,95 @@ from . import protocol
 
 
 @dataclass
-class Состояние:
-    последний_круг: int = 0
-    режим: str = "ДЕЙСТВИЕ"
-    разговорных_кругов: int = 0
-    выданные_числа: set[int] = field(default_factory=set)
-    бросков: int = 0
-    источник: str = ""
+class ResumeState:
+    last_round: int = 0
+    mode: str = "ДЕЙСТВИЕ"
+    talk_rounds: int = 0
+    issued_numbers: set[int] = field(default_factory=set)
+    rolls: int = 0
+    source: str = ""
 
 
-def восстановить(
-    события: list[dict], имена: list[str]
-) -> tuple[dict[str, str], Состояние]:
+def restore(
+    events: list[dict], names: list[str]
+) -> tuple[dict[str, str], ResumeState]:
     """Возвращает историю на каждого агента и состояние прогона."""
-    куски: dict[str, list[str]] = {МАСТЕР: [], **{имя: [] for имя in имена}}
-    режимы: dict[int, str] = {
-        е["круг"]: е.get("режим", "ДЕЙСТВИЕ")
-        for е in события if е.get("тип_события") == "круг"
+    chunks: dict[str, list[str]] = {GM: [], **{name: [] for name in names}}
+    modes: dict[int, str] = {
+        ev["round"]: ev.get("mode", "ДЕЙСТВИЕ")
+        for ev in events if ev.get("event_type") == "круг"
     }
-    состояние = Состояние()
-    текущий_круг = None
+    state = ResumeState()
+    current_round = None
 
-    def всем(строка: str, кроме: str | None = None) -> None:
-        for имя in имена:
-            if имя != кроме:
-                куски[имя].append(строка)
+    def everyone(line: str, excluding: str | None = None) -> None:
+        for name in names:
+            if name != excluding:
+                chunks[name].append(line)
 
-    for е in события:
-        тип = е.get("тип_события")
+    for ev in events:
+        kind = ev.get("event_type")
 
-        if тип == "бросок":
-            бросок = е["бросок"]
-            состояние.выданные_числа.update({бросок["выпало"], бросок["цель"]})
-            состояние.бросков += 1
+        if kind == "бросок":
+            roll = ev["roll"]
+            state.issued_numbers.update({roll["rolled"], roll["target"]})
+            state.rolls += 1
             continue  # результат уже вписан в сцену мастера, дважды не подаём
 
-        if тип != "ход":
+        if kind != "ход":
             continue
 
-        круг = е.get("круг", 0)
-        if круг != текущий_круг:
-            текущий_круг = круг
-            шапка = ("## Круг ноль, вечер накануне" if круг == 0
-                     else f"## Круг {круг}. Режим: {режимы.get(круг, 'ДЕЙСТВИЕ')}")
-            куски[МАСТЕР].append(f"\n{шапка}")
-            всем(f"\n{шапка}")
+        round = ev.get("round", 0)
+        if round != current_round:
+            current_round = round
+            header = ("## Круг ноль, вечер накануне" if round == 0
+                     else f"## Круг {round}. Режим: {modes.get(round, 'ДЕЙСТВИЕ')}")
+            chunks[GM].append(f"\n{header}")
+            everyone(f"\n{header}")
 
-        говорящий = е.get("говорящий", "")
-        текст = (е.get("текст") or "").strip()
-        видимость = е.get("видимость", "всем")
-        if not текст:
+        speaker = ev.get("speaker", "")
+        text = (ev.get("text") or "").strip()
+        visibility = ev.get("visibility", "всем")
+        if not text:
             continue
 
-        if говорящий == МАСТЕР:
-            if видимость == "всем":
-                всем(f"МАСТЕР:\n{текст}")
-                куски[МАСТЕР].append(f"ТЫ (сцена):\n{текст}")
-            elif видимость.startswith("только "):
-                кому = видимость.removeprefix("только ")
-                if кому in куски:
-                    куски[кому].append(f"ТОЛЬКО ДЛЯ ТЕБЯ:\n{текст}")
-                куски[МАСТЕР].append(f"ТЫ (только для {кому}):\n{текст}")
+        if speaker == GM:
+            if visibility == "всем":
+                everyone(f"МАСТЕР:\n{text}")
+                chunks[GM].append(f"ТЫ (сцена):\n{text}")
+            elif visibility.startswith("только "):
+                to = visibility.removeprefix("только ")
+                if to in chunks:
+                    chunks[to].append(f"ТОЛЬКО ДЛЯ ТЕБЯ:\n{text}")
+                chunks[GM].append(f"ТЫ (только для {to}):\n{text}")
             continue
 
         # Ход игрока.
-        тайно = видимость == "только мастеру"
-        пометка = "ТАЙНЫЙ ХОД, " if тайно else ""
-        куски[МАСТЕР].append(f"{пометка}{говорящий.upper()}: {текст}")
-        if говорящий in куски:
-            куски[говорящий].append(f"ТЫ{' (тайно)' if тайно else ''}: {текст}")
+        secret = visibility == "только мастеру"
+        mark = "ТАЙНЫЙ ХОД, " if secret else ""
+        chunks[GM].append(f"{mark}{speaker.upper()}: {text}")
+        if speaker in chunks:
+            chunks[speaker].append(f"ТЫ{' (тайно)' if secret else ''}: {text}")
         # В разговоре ход видели остальные, в действии — нет. Круг ноль виден всем.
-        разговор = круг == 0 or режимы.get(круг) == protocol.TALK
-        if разговор and not тайно:
-            всем(f"ХОД ИГРОКА — {говорящий.upper()}:\n{текст}", кроме=говорящий)
+        talk = round == 0 or modes.get(round) == protocol.TALK
+        if talk and not secret:
+            everyone(f"ХОД ИГРОКА — {speaker.upper()}:\n{text}", excluding=speaker)
 
-    состояние.последний_круг = max(режимы) if режимы else 0
-    сцены_мастера = [
-        е for е in события
-        if е.get("тип_события") == "ход" and е.get("говорящий") == МАСТЕР
-        and е.get("видимость") == "всем"
+    state.last_round = max(modes) if modes else 0
+    scenes_gm = [
+        ev for ev in events
+        if ev.get("event_type") == "ход" and ev.get("speaker") == GM
+        and ev.get("visibility") == "всем"
     ]
-    if сцены_мастера:
-        состояние.режим = сцены_мастера[-1].get("режим", protocol.ACTION)
-    состояние.разговорных_кругов = sum(
-        1 for круг, режим in режимы.items() if режим == protocol.TALK
+    if scenes_gm:
+        state.mode = scenes_gm[-1].get("mode", protocol.ACTION)
+    state.talk_rounds = sum(
+        1 for round, mode in modes.items() if mode == protocol.TALK
     )
 
-    история = {
-        агент: (ШАПКА_МАСТЕРУ if агент == МАСТЕР else ШАПКА_ИГРОКУ)
-        + "\n" + "\n\n".join(строки).strip()
-        for агент, строки in куски.items()
+    history = {
+        agent: (HEADER_GM if agent == GM else HEADER_PLAYER)
+        + "\n" + "\n\n".join(lines).strip()
+        for agent, lines in chunks.items()
     }
-    return история, состояние
+    return history, state

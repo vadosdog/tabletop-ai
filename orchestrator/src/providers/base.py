@@ -12,59 +12,59 @@ from typing import Protocol, runtime_checkable
 
 
 @dataclass
-class Ответ:
-    текст: str
-    провайдер: str
-    модель: str
-    латентность_мс: int
-    токены: dict | None = None
-    стоимость: float | None = None
-    модель_факт: str | None = None   # что реально ответило, а не алиас из конфига
-    метки: list[str] = field(default_factory=list)
+class Reply:
+    text: str
+    provider: str
+    model: str
+    latency_ms: int
+    tokens: dict | None = None
+    cost: float | None = None
+    model_actual: str | None = None   # что реально ответило, а не алиас из конфига
+    tags: list[str] = field(default_factory=list)
 
 
 @runtime_checkable
-class Сессия(Protocol):
+class Session(Protocol):
     """Один агент со своей историей. Историю держит либо провайдер, либо адаптер."""
 
-    async def отправить(self, текст: str) -> Ответ: ...
+    async def send(self, text: str) -> Reply: ...
 
-    async def закрыть(self) -> None: ...
+    async def close(self) -> None: ...
 
 
 @runtime_checkable
-class Провайдер(Protocol):
-    имя: str
+class Provider(Protocol):
+    name: str
 
-    async def открыть(self, агент: str, системный_промпт: str, модель: str) -> Сессия: ...
+    async def open(self, agent: str, system_prompt: str, model: str) -> Session: ...
 
-    async def завершить(self) -> None: ...
-
-
-_РЕЕСТР: dict[str, type] = {}
+    async def shutdown(self) -> None: ...
 
 
-def зарегистрировать(имя: str, класс: type) -> None:
-    _РЕЕСТР[имя] = класс
+_REGISTRY: dict[str, type] = {}
 
 
-def создать(имя: str, **параметры) -> Провайдер:
-    if имя not in _РЕЕСТР:
+def register(name: str, cls: type) -> None:
+    _REGISTRY[name] = cls
+
+
+def create(name: str, **params) -> Provider:
+    if name not in _REGISTRY:
         # Ленивая загрузка: claude тянет за собой SDK, сторонние — httpx,
         # заглушка — ничего. Сухой прогон не должен требовать ни того ни другого.
-        if имя == "claude":
+        if name == "claude":
             from . import claude as _  # noqa: F401
-        elif имя in ("stub", "заглушка"):
+        elif name in ("stub", "заглушка"):
             from . import stub as _  # noqa: F401
-        elif имя == "openai":
+        elif name == "openai":
             from . import openai as _  # noqa: F401
-        elif имя == "gemini":
+        elif name == "gemini":
             from . import gemini as _  # noqa: F401
-        elif имя == "xai":
+        elif name == "xai":
             from . import xai as _  # noqa: F401
-        elif имя == "openrouter":
+        elif name == "openrouter":
             from . import openrouter as _  # noqa: F401
-    if имя not in _РЕЕСТР:
-        известные = ", ".join(sorted(_РЕЕСТР)) or "ничего"
-        raise ValueError(f"неизвестный провайдер {имя!r}; зарегистрированы: {известные}")
-    return _РЕЕСТР[имя](**параметры)
+    if name not in _REGISTRY:
+        known = ", ".join(sorted(_REGISTRY)) or "ничего"
+        raise ValueError(f"неизвестный провайдер {name!r}; зарегистрированы: {known}")
+    return _REGISTRY[name](**params)

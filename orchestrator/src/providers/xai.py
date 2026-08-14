@@ -12,30 +12,30 @@
 
 from __future__ import annotations
 
-from .base import зарегистрировать
-from .настройки import ключ
-from .общий import метка_агента
-from .чат import ПровайдерЧата, СессияHTTP
+from .base import register
+from .settings import key
+from .common import tag_agent
+from .chat import ChatProvider, HttpSession
 
 
-class ПровайдерXAI(ПровайдерЧата):
-    имя = "xai"
-    базовый_url = "https://api.x.ai/v1/chat/completions"
+class XAIProvider(ChatProvider):
+    name = "xai"
+    base_url = "https://api.x.ai/v1/chat/completions"
 
     # У xAI размышление лежит рядом с выходом, а не внутри него: на круге ноль
     # 4741 + 142 + 167 = 5050 = total_tokens. Не сложить — выход и деньги
     # занижены наполовину.
-    размышление_отдельно = True
+    reasoning_separately = True
 
-    def _заголовки(self, сессия: СессияHTTP) -> dict[str, str]:
+    def _headings(self, session: HttpSession) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {ключ(self.имя)}",
+            "Authorization": f"Bearer {key(self.name)}",
             "Content-Type": "application/json",
             # Липкость кэша: без неё запросы агента разъезжаются по машинам
             # и половина ходов оплачивается по полной входной цене. Имя
             # персонажа сюда не поставить — заголовки обязаны быть ASCII.
-            "x-grok-conv-id": метка_агента(сессия.агент),
+            "x-grok-conv-id": tag_agent(session.agent),
         }
 
 
-зарегистрировать("xai", ПровайдерXAI)
+register("xai", XAIProvider)

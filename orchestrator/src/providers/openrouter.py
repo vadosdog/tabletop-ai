@@ -29,32 +29,32 @@ Grok. Цены на чтение и запись кэша при этом ест
 
 from __future__ import annotations
 
-from .base import зарегистрировать
-from .настройки import ключ
-from .общий import Разбор, СессияHTTP
-from .чат import ПровайдерЧата
+from .base import register
+from .settings import key
+from .common import ParsedResponse, HttpSession
+from .chat import ChatProvider
 
 
-class ПровайдерOpenRouter(ПровайдерЧата):
-    имя = "openrouter"
-    базовый_url = "https://openrouter.ai/api/v1/chat/completions"
+class OpenRouterProvider(ChatProvider):
+    name = "openrouter"
+    base_url = "https://openrouter.ai/api/v1/chat/completions"
 
     # У OpenRouter уровень размышления передаётся объектом, а не строкой,
     # поэтому поле из чат.py не используется — тело собирается ниже.
-    поле_размышления = "reasoning"
+    field_reasoning = "reasoning"
 
-    def __init__(self, *доводы, апстримы: list[str] | None = None,
-                 явный_кэш: bool = True, **именованные):
-        super().__init__(*доводы, **именованные)
+    def __init__(self, *arguments, upstreams: list[str] | None = None,
+                 explicit_cache: bool = True, **named):
+        super().__init__(*arguments, **named)
         # Список разрешённых апстримов приходит из конфига: зашивать его в код
         # нельзя, состав хостов у модели меняется со временем.
-        self.апстримы = список_апстримов(апстримы)
-        self.явный_кэш = явный_кэш
-        self.виденные_апстримы: list[str] = []
+        self.upstreams = list_upstreams(upstreams)
+        self.explicit_cache = explicit_cache
+        self.seen_upstreams: list[str] = []
 
-    def _заголовки(self, сессия: СессияHTTP) -> dict[str, str]:
+    def _headings(self, session: HttpSession) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {ключ(self.имя)}",
+            "Authorization": f"Bearer {key(self.name)}",
             "Content-Type": "application/json",
             # OpenRouter просит представиться: по этим полям он разводит трафик
             # и показывает расход в кабинете отдельной строкой. Только латиница:
@@ -63,35 +63,35 @@ class ПровайдерOpenRouter(ПровайдерЧата):
             "X-Title": "NRI: four models at one table",
         }
 
-    def _сообщения(self, сессия: СессияHTTP) -> list[dict]:
-        сообщения = super()._сообщения(сессия)
-        if not self.явный_кэш:
-            return сообщения
+    def _messages(self, session: HttpSession) -> list[dict]:
+        messages = super()._messages(session)
+        if not self.explicit_cache:
+            return messages
         # Пометка кэша на системный промпт: он у игрока самый большой и не
         # меняется весь прогон, а история дописывается и кэшируется хуже.
-        сообщения[0] = {
+        messages[0] = {
             "role": "system",
             "content": [{
                 "type": "text",
-                "text": сессия.системный_промпт,
+                "text": session.system_prompt,
                 "cache_control": {"type": "ephemeral"},
             }],
         }
-        return сообщения
+        return messages
 
-    def _тело(self, сессия: СессияHTTP) -> dict:
-        тело = super()._тело(сессия)
+    def _body(self, session: HttpSession) -> dict:
+        body = super()._body(session)
         # Строковый reasoning_effort из чат.py прослойке не годится — у неё
         # объект. Снимаем его и ставим свой.
-        тело.pop("reasoning_effort", None)
+        body.pop("reasoning_effort", None)
 
-        уровень = self.параметры.уровень(self.имя)
-        if уровень and "reasoning" not in self.отброшенные:
-            тело["reasoning"] = {"effort": уровень}
+        level = self.params.level(self.name)
+        if level and "reasoning" not in self.dropped:
+            body["reasoning"] = {"effort": level}
 
-        if "provider" not in self.отброшенные:
-            тело["provider"] = {
-                "order": self.апстримы,
+        if "provider" not in self.dropped:
+            body["provider"] = {
+                "order": self.upstreams,
                 # Никаких запасных хостов: лучше упасть, чем доиграть на другой
                 # сборке и не заметить.
                 "allow_fallbacks": False,
@@ -100,63 +100,63 @@ class ПровайдерOpenRouter(ПровайдерЧата):
             }
         # Просим прослойку посчитать деньги самой: её цифра точнее нашего
         # пересчёта по ставкам из конфига, потому что это её же счёт.
-        тело["usage"] = {"include": True}
-        return тело
+        body["usage"] = {"include": True}
+        return body
 
-    def _снять_отвергнутое(self, ответ: str) -> str | None:
+    def _clear_rejected(self, reply: str) -> str | None:
         """Сначала спасаем пометки кэша, потом уже общие параметры.
 
         Кэш — единственное, чем здесь можно пожертвовать без ущерба для
         сравнения. Фиксацией апстрима жертвовать нельзя: без неё прогон
         перестаёт быть честным, и падение уместнее.
         """
-        низ = ответ.lower()
-        if self.явный_кэш and "cache_control" in низ:
-            self.явный_кэш = False
-            self.добытые_расхождения.append(
+        tail = reply.lower()
+        if self.explicit_cache and "cache_control" in tail:
+            self.explicit_cache = False
+            self.observed_discrepancies.append(
                 "апстрим не принял пометки явного кэша — они сняты. "
                 "Автоматического кэша по префиксу у этой модели нет, так что "
                 "доля попаданий будет нулевой: весь контекст каждый ход "
                 "оплачивается по полной входной цене, в отличие от остальных."
             )
             return "cache_control"
-        return super()._снять_отвергнутое(ответ)
+        return super()._clear_rejected(reply)
 
-    def _разобрать(self, данные: dict) -> Разбор:
-        разбор = super()._разобрать(данные)
+    def _parse(self, data: dict) -> ParsedResponse:
+        parsed = super()._parse(data)
 
-        апстрим = данные.get("provider") or данные.get("provider_name")
-        разбор.апстрим = str(апстрим) if апстрим else None
-        if разбор.апстрим:
+        upstream = data.get("provider") or data.get("provider_name")
+        parsed.upstream = str(upstream) if upstream else None
+        if parsed.upstream:
             # Кто ответил — видно в каждом ходе, а не только в отдельном событии.
-            разбор.модель_факт = f"{разбор.модель_факт or '?'} @ {разбор.апстрим}"
-            if разбор.апстрим not in self.виденные_апстримы:
-                самый_первый = not self.виденные_апстримы
-                self.виденные_апстримы.append(разбор.апстрим)
-                self._записать(
-                    "апстрим", апстрим=разбор.апстрим,
-                    разрешённые=self.апстримы,
-                    первый=самый_первый,
+            parsed.model_actual = f"{parsed.model_actual or '?'} @ {parsed.upstream}"
+            if parsed.upstream not in self.seen_upstreams:
+                very_first = not self.seen_upstreams
+                self.seen_upstreams.append(parsed.upstream)
+                self._write(
+                    "апстрим", upstream=parsed.upstream,
+                    allowed=self.upstreams,
+                    first=very_first,
                 )
-                if not самый_первый:
+                if not very_first:
                     # Смена посреди прогона — событие, а не тихая замена.
-                    self.добытые_расхождения.append(
+                    self.observed_discrepancies.append(
                         f"апстрим сменился посреди прогона: было "
-                        f"{', '.join(self.виденные_апстримы[:-1])}, стало "
-                        f"{разбор.апстрим}. Часть ходов сыграна на другой сборке, "
+                        f"{', '.join(self.seen_upstreams[:-1])}, стало "
+                        f"{parsed.upstream}. Часть ходов сыграна на другой сборке, "
                         f"и сравнивать их с остальными надо с оговоркой."
                     )
 
-        usage = данные.get("usage") or {}
+        usage = data.get("usage") or {}
         if isinstance(usage.get("cost"), (int, float)):
-            разбор.деньги = float(usage["cost"])
-        return разбор
+            parsed.cost = float(usage["cost"])
+        return parsed
 
 
-def список_апстримов(заданные: list[str] | None) -> list[str]:
+def list_upstreams(given: list[str] | None) -> list[str]:
     """Пустой список означал бы «маршрутизируй как хочешь» — это запрещено."""
-    апстримы = [и for и in (заданные or []) if и]
-    if not апстримы:
+    upstreams = [i for i in (given or []) if i]
+    if not upstreams:
         raise SystemExit(
             "openrouter: не задан список апстримов. Без него прослойка вольна "
             "сменить хост посреди прогона, и сравнение развалится.\n"
@@ -166,7 +166,7 @@ def список_апстримов(заданные: list[str] | None) -> list[
             "  curl -s https://openrouter.ai/api/v1/models/qwen/qwen3.7-max/endpoints "
             "| python3 -m json.tool"
         )
-    return апстримы
+    return upstreams
 
 
-зарегистрировать("openrouter", ПровайдерOpenRouter)
+register("openrouter", OpenRouterProvider)

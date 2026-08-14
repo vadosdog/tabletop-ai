@@ -12,99 +12,99 @@
 
 from __future__ import annotations
 
-from .base import зарегистрировать
-from .настройки import ключ
-from .общий import ПровайдерHTTP, Разбор, СессияHTTP, Токены
+from .base import register
+from .settings import key
+from .common import HttpProvider, ParsedResponse, HttpSession, Tokens
 
 
-class ПровайдерOpenAI(ПровайдерHTTP):
-    имя = "openai"
-    базовый_url = "https://api.openai.com/v1/responses"
+class OpenAIProvider(HttpProvider):
+    name = "openai"
+    base_url = "https://api.openai.com/v1/responses"
 
     def _url(self) -> str:
-        return self.базовый_url
+        return self.base_url
 
-    def _заголовки(self, сессия: СессияHTTP) -> dict[str, str]:
+    def _headings(self, session: HttpSession) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {ключ(self.имя)}",
+            "Authorization": f"Bearer {key(self.name)}",
             "Content-Type": "application/json",
         }
 
-    def _тело(self, сессия: СессияHTTP) -> dict:
-        вход = []
-        for шаг in сессия.история:
-            тип = "input_text" if шаг["роль"] == "user" else "output_text"
-            вход.append({
-                "role": шаг["роль"],
-                "content": [{"type": тип, "text": шаг["текст"]}],
+    def _body(self, session: HttpSession) -> dict:
+        input = []
+        for step in session.history:
+            kind = "input_text" if step["role"] == "user" else "output_text"
+            input.append({
+                "role": step["role"],
+                "content": [{"type": kind, "text": step["text"]}],
             })
 
-        тело: dict = {
-            "model": сессия.модель,
-            "instructions": сессия.системный_промпт,
-            "input": вход,
-            "max_output_tokens": self.параметры.предел_ответа,
+        body: dict = {
+            "model": session.model,
+            "instructions": session.system_prompt,
+            "input": input,
+            "max_output_tokens": self.params.max_output,
             # Историю держим у себя: транскрипт должен лежать в нашем логе,
             # а не на стороне вендора.
             "store": False,
-            "prompt_cache_key": f"нри-{сессия.агент}",
+            "prompt_cache_key": f"нри-{session.agent}",
         }
 
-        уровень = self.параметры.уровень(self.имя)
-        if уровень and "reasoning_effort" not in self.отброшенные:
-            тело["reasoning"] = {"effort": уровень}
-        if self.параметры.температура is not None and "temperature" not in self.отброшенные:
-            тело["temperature"] = self.параметры.температура
-        if self.параметры.top_p is not None and "top_p" not in self.отброшенные:
-            тело["top_p"] = self.параметры.top_p
-        return тело
+        level = self.params.level(self.name)
+        if level and "reasoning_effort" not in self.dropped:
+            body["reasoning"] = {"effort": level}
+        if self.params.temperature is not None and "temperature" not in self.dropped:
+            body["temperature"] = self.params.temperature
+        if self.params.top_p is not None and "top_p" not in self.dropped:
+            body["top_p"] = self.params.top_p
+        return body
 
-    def _разобрать(self, данные: dict) -> Разбор:
-        куски: list[str] = []
-        сигнал: str | None = None
+    def _parse(self, data: dict) -> ParsedResponse:
+        chunks: list[str] = []
+        signal: str | None = None
 
-        for элемент in данные.get("output") or []:
-            if элемент.get("type") != "message":
+        for item in data.get("output") or []:
+            if item.get("type") != "message":
                 continue
-            for блок in элемент.get("content") or []:
-                if блок.get("type") == "output_text" and блок.get("text"):
-                    куски.append(блок["text"])
-                elif блок.get("type") == "refusal":
+            for block in item.get("content") or []:
+                if block.get("type") == "output_text" and block.get("text"):
+                    chunks.append(block["text"])
+                elif block.get("type") == "refusal":
                     # Явное поле отказа: вендор сказал прямо, гадать не о чем.
-                    сигнал = "refusal"
-                    if блок.get("refusal"):
-                        куски.append(блок["refusal"])
+                    signal = "refusal"
+                    if block.get("refusal"):
+                        chunks.append(block["refusal"])
 
-        оборван = False
-        причина = ((данные.get("incomplete_details") or {}).get("reason"))
-        if причина == "max_output_tokens":
-            оборван = True
-        elif причина == "content_filter":
-            сигнал = сигнал or "content_filter"
+        truncated = False
+        reason = ((data.get("incomplete_details") or {}).get("reason"))
+        if reason == "max_output_tokens":
+            truncated = True
+        elif reason == "content_filter":
+            signal = signal or "content_filter"
 
-        usage = данные.get("usage") or {}
-        токены = Токены(
-            вход=int(usage.get("input_tokens") or 0),
-            выход=int(usage.get("output_tokens") or 0),
-            размышление=int(
+        usage = data.get("usage") or {}
+        tokens = Tokens(
+            input=int(usage.get("input_tokens") or 0),
+            output=int(usage.get("output_tokens") or 0),
+            reasoning=int(
                 (usage.get("output_tokens_details") or {}).get("reasoning_tokens") or 0
             ),
-            кэш_чтение=int(
+            cache_read=int(
                 (usage.get("input_tokens_details") or {}).get("cached_tokens") or 0
             ),
-            сырое=usage,
+            raw=usage,
         )
         # Кэшированные токены OpenAI показывает внутри input_tokens, а не рядом.
         # Не вычесть — счёт входа будет вдвое больше настоящего.
-        токены.вход = max(0, токены.вход - токены.кэш_чтение)
+        tokens.input = max(0, tokens.input - tokens.cache_read)
 
-        return Разбор(
-            текст="\n\n".join(к.strip() for к in куски if к.strip()).strip(),
-            токены=токены,
-            модель_факт=данные.get("model"),
-            сигнал_отказа=сигнал,
-            оборван=оборван,
+        return ParsedResponse(
+            text="\n\n".join(d.strip() for d in chunks if d.strip()).strip(),
+            tokens=tokens,
+            model_actual=data.get("model"),
+            signal_refusal=signal,
+            truncated=truncated,
         )
 
 
-зарегистрировать("openai", ПровайдерOpenAI)
+register("openai", OpenAIProvider)

@@ -14,15 +14,15 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-ЗАГОЛОВКИ = {
+HEADINGS = {
     "сеттинг": "## 0. Блок сеттинга",
     "партия": "## 0.5. Блок партии",
-    "круг_ноль": "## 0.7. Круг ноль: вечер накануне",
-    "мастер": "## 1. Промпт мастеру",
+    "round_zero": "## 0.7. Круг ноль: вечер накануне",
+    "gm": "## 1. Промпт мастеру",
     "игрок_общее": "## 2. Промпт игроку. Общая часть",
 }
 
-КАРТОЧКИ = {
+CARDS = {
     "Ханна": "### Игрок первый",
     "Ансельм": "### Игрок второй",
     "Курт": "### Игрок третий",
@@ -30,70 +30,70 @@ from pathlib import Path
 }
 
 
-class ОшибкаПромптов(RuntimeError):
+class PromptError(RuntimeError):
     pass
 
 
-def _блок_после(документ: str, заголовок: str) -> str:
+def _block_after(document: str, heading: str) -> str:
     """Первый fenced-блок после указанного заголовка."""
-    позиция = документ.find(заголовок)
-    if позиция < 0:
-        raise ОшибкаПромптов(f"в документе нет заголовка {заголовок!r}")
+    position = document.find(heading)
+    if position < 0:
+        raise PromptError(f"в документе нет заголовка {heading!r}")
 
-    хвост = документ[позиция + len(заголовок):]
-    совпадение = re.search(r"^```[^\n]*\n(?P<тело>.*?)^```", хвост, re.DOTALL | re.MULTILINE)
-    if not совпадение:
-        raise ОшибкаПромптов(f"после {заголовок!r} не нашёлся блок в тройных кавычках")
-    return совпадение.group("тело").strip()
+    tail = document[position + len(heading):]
+    matched = re.search(r"^```[^\n]*\n(?P<тело>.*?)^```", tail, re.DOTALL | re.MULTILINE)
+    if not matched:
+        raise PromptError(f"после {heading!r} не нашёлся блок в тройных кавычках")
+    return matched.group("тело").strip()
 
 
-def _добавки(корень: Path, кому: str) -> list[tuple[str, str]]:
-    папка = корень / "prompts" / "overrides" / кому
-    if not папка.is_dir():
+def _extras(root: Path, to: str) -> list[tuple[str, str]]:
+    folder = root / "prompts" / "overrides" / to
+    if not folder.is_dir():
         return []
-    return [(ф.name, ф.read_text(encoding="utf-8").strip())
-            for ф in sorted(папка.glob("*.txt"))]
+    return [(fn.name, fn.read_text(encoding="utf-8").strip())
+            for fn in sorted(folder.glob("*.txt"))]
 
 
-class Промпты:
-    def __init__(self, путь_документа: str | Path, корень: str | Path):
-        путь = Path(путь_документа)
-        if not путь.is_file():
-            raise ОшибкаПромптов(f"документ проекта не найден: {путь}")
-        документ = путь.read_text(encoding="utf-8")
+class Prompts:
+    def __init__(self, path_document: str | Path, root: str | Path):
+        path = Path(path_document)
+        if not path.is_file():
+            raise PromptError(f"документ проекта не найден: {path}")
+        document = path.read_text(encoding="utf-8")
 
-        self.корень = Path(корень)
-        self.блоки = {имя: _блок_после(документ, заг) for имя, заг in ЗАГОЛОВКИ.items()}
-        self.карточки = {имя: _блок_после(документ, заг) for имя, заг in КАРТОЧКИ.items()}
-        self.добавки_мастеру = _добавки(self.корень, "gm")
-        self.добавки_игроку = _добавки(self.корень, "player")
+        self.root = Path(root)
+        self.blocks = {name: _block_after(document, hdr) for name, hdr in HEADINGS.items()}
+        self.cards = {name: _block_after(document, hdr) for name, hdr in CARDS.items()}
+        self.extras_gm = _extras(self.root, "gm")
+        self.extras_player = _extras(self.root, "player")
 
     @property
-    def круг_ноль(self) -> str:
-        return self.блоки["круг_ноль"]
+    def round_zero(self) -> str:
+        return self.blocks["round_zero"]
 
-    def мастеру(self) -> str:
-        части = [self.блоки["сеттинг"], self.блоки["партия"], self.блоки["мастер"]]
-        части += [текст for _, текст in self.добавки_мастеру]
-        return "\n\n---\n\n".join(части)
+    def gm(self) -> str:
+        parts = [self.blocks["сеттинг"], self.blocks["партия"], self.blocks["gm"]]
+        parts += [text for _, text in self.extras_gm]
+        return "\n\n---\n\n".join(parts)
 
-    def игроку(self, персонаж: str) -> str:
-        if персонаж not in self.карточки:
-            raise ОшибкаПромптов(f"нет карточки для {персонаж!r}")
-        части = [
-            self.блоки["сеттинг"],
-            self.блоки["партия"],
-            self.блоки["игрок_общее"],
-            self.карточки[персонаж],
+    def player(self, character: str) -> str:
+        if character not in self.cards:
+            raise PromptError(f"нет карточки для {character!r}")
+        parts = [
+            self.blocks["сеттинг"],
+            self.blocks["партия"],
+            self.blocks["игрок_общее"],
+            self.cards[character],
         ]
-        части += [текст for _, текст in self.добавки_игроку]
-        return "\n\n---\n\n".join(части)
+        parts += [text for _, text in self.extras_player]
+        return "\n\n---\n\n".join(parts)
 
-    def сводка(self) -> dict:
+    def summary(self) -> dict:
         """Что и откуда взято — уходит в шапку лога."""
         return {
-            "блоки": {имя: len(текст) for имя, текст in self.блоки.items()},
-            "карточки": {имя: len(текст) for имя, текст in self.карточки.items()},
-            "добавки_мастеру": [имя for имя, _ in self.добавки_мастеру],
-            "добавки_игроку": [имя for имя, _ in self.добавки_игроку],
+            "blocks": {name: len(text) for name, text in self.blocks.items()},
+            "cards": {name: len(text) for name, text in self.cards.items()},
+            "extras_gm": [name for name, _ in self.extras_gm],
+            "extras_player": [name for name, _ in self.extras_player],
         }

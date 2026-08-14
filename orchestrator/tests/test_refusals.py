@@ -10,59 +10,59 @@
 import sys
 from pathlib import Path
 
-КОРЕНЬ = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(КОРЕНЬ))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-from src.providers.отказы import распознать  # noqa: E402
+from src.providers.refusals import recognise  # noqa: E402
 
 
 def тест_сигнал_api_верят_без_оговорок():
-    отказ = распознать("", сигнал="content_filter")
-    assert отказ is not None and отказ.уверенный
-    assert "OpenAI" in отказ.причина
+    refusal = recognise("", signal="content_filter")
+    assert refusal is not None and refusal.confident
+    assert "OpenAI" in refusal.reason
 
-    отказ = распознать("что-то", сигнал="SAFETY")
-    assert отказ is not None and отказ.уверенный
+    refusal = recognise("что-то", signal="SAFETY")
+    assert refusal is not None and refusal.confident
 
 
 def тест_разрыв_рамки_это_отказ():
-    for текст in (
+    for text in (
         "Как языковая модель, я не могу отыгрывать сцену с насилием над ребёнком.",
         "Извините, но мои инструкции не позволяют мне продолжать эту сцену.",
         "I can't continue this roleplay. As an AI assistant, I have to decline.",
         "Это противоречит политике безопасности.",
     ):
-        отказ = распознать(текст)
-        assert отказ is not None, f"пропущен отказ: {текст}"
-        assert отказ.уверенный, f"занижена уверенность: {текст}"
+        refusal = recognise(text)
+        assert refusal is not None, f"пропущен отказ: {text}"
+        assert refusal.confident, f"занижена уверенность: {text}"
 
 
 def тест_отыгрыш_не_отказ():
     """Персонаж отказывается действовать — это ход, а не отказ модели."""
-    for текст in (
+    for text in (
         "Курт мотает головой: «Я туда не полезу, там под полом что-то живое».",
         "«Не буду я с ней говорить», — Ханна отворачивается к окну.",
         "Ансельм не может поднять молот: рука не слушается после удара.",
         "Лизель молчит. Она не станет врать патрулю в лицо, но и правду не скажет.",
         "«Я не могу вспомнить, что было ночью», — Курт трёт лоб.",
     ):
-        assert распознать(текст) is None, f"ложная тревога: {текст}"
+        assert recognise(text) is None, f"ложная тревога: {text}"
 
 
 def тест_мета_отказ_без_рамки_только_подозрение():
     """Отказ от сцены без упоминания модели — под вопросом, решают глаза."""
-    отказ = распознать("Я не могу продолжать описывать эту сцену.")
-    assert отказ is not None
-    assert отказ.уверенность == "подозрение"
+    refusal = recognise("Я не могу продолжать описывать эту сцену.")
+    assert refusal is not None
+    assert refusal.confidence == "подозрение"
 
 
 def тест_отказ_на_чужом_языке_это_отказ():
     """Русский персонаж не говорит «I cannot continue» — это отписка вендора."""
-    отказ = распознать(
+    refusal = recognise(
         "I'm sorry, but I cannot continue this scene. It depicts harm to "
         "a child and I would rather suggest a different direction for the story."
     )
-    assert отказ is not None and отказ.уверенный, отказ
+    assert refusal is not None and refusal.confident, refusal
 
 
 def тест_ход_на_чужом_языке_не_отказ():
@@ -72,37 +72,37 @@ def тест_ход_на_чужом_языке_не_отказ():
     записало его в отказы, и законная реплика была выброшена из игры —
     персонаж просидел круг молча не по своей вине.
     """
-    отказ = распознать(
+    refusal = recognise(
         "Ханна sparingly and quietly continues resting, waiting for the salt "
         "wagons to move on before she rides further from the road."
     )
-    assert отказ is not None, "сбой языка должен быть замечен"
-    assert отказ.уверенность == "не_по_русски", отказ.уверенность
-    assert not отказ.уверенный, "ход не должен глушиться из-за языка"
+    assert refusal is not None, "сбой языка должен быть замечен"
+    assert refusal.confidence == "не_по_русски", refusal.confidence
+    assert not refusal.confident, "ход не должен глушиться из-за языка"
 
 
 def тест_пустой_ответ_не_отказ():
     """Пустой ответ — своя история: он повторяется, а отказ нет."""
-    assert распознать("") is None
-    assert распознать("   \n ") is None
+    assert recognise("") is None
+    assert recognise("   \n ") is None
 
 
 def тест_цитата_обрезана_и_однострочна():
-    отказ = распознать("Как ИИ,\nя не могу\nэто отыгрывать. " + "а" * 500)
-    assert отказ is not None
-    assert "\n" not in отказ.цитата
-    assert len(отказ.цитата) <= 301
+    refusal = recognise("Как ИИ,\nя не могу\nэто отыгрывать. " + "а" * 500)
+    assert refusal is not None
+    assert "\n" not in refusal.quote
+    assert len(refusal.quote) <= 301
 
 
 if __name__ == "__main__":
-    провалов = 0
-    for имя, функция in sorted(globals().items()):
-        if имя.startswith("тест_"):
+    failures = 0
+    for name, func in sorted(globals().items()):
+        if name.startswith("тест_"):
             try:
-                функция()
-                print(f"  ok   {имя}")
-            except AssertionError as ошибка:
-                провалов += 1
-                print(f"  ПЛОХО {имя}: {ошибка}")
-    print("ловля отказов в порядке" if not провалов else f"провалов: {провалов}")
-    sys.exit(1 if провалов else 0)
+                func()
+                print(f"  ok   {name}")
+            except AssertionError as error:
+                failures += 1
+                print(f"  ПЛОХО {name}: {error}")
+    print("ловля отказов в порядке" if not failures else f"провалов: {failures}")
+    sys.exit(1 if failures else 0)

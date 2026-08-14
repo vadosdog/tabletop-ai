@@ -13,232 +13,232 @@ import sys
 import tempfile
 from pathlib import Path
 
-КОРЕНЬ = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(КОРЕНЬ))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 import asyncio  # noqa: E402
 
-from src.combat import Боевка  # noqa: E402
-from src.dice import Кубики  # noqa: E402
-from src.logbook import Журнал, прочитать  # noqa: E402
-from src.prompts import Промпты  # noqa: E402
-from src.providers import base as провайдеры  # noqa: E402
-from src.session import Прогон  # noqa: E402
+from src.combat import Combat  # noqa: E402
+from src.dice import Dice  # noqa: E402
+from src.logbook import Logbook, read  # noqa: E402
+from src.prompts import Prompts  # noqa: E402
+from src.providers import base as providers  # noqa: E402
+from src.session import Run  # noqa: E402
 
-КОНФИГ = json.loads((КОРЕНЬ / "config.json").read_text(encoding="utf-8"))
+CONFIG = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
 
 
-def прогнать() -> list[dict]:
-    конфиг = json.loads(json.dumps(КОНФИГ))
-    конфиг["предел_кругов"] = 16
-    конфиг["мастер"]["провайдер"] = "stub"
-    for настройки in конфиг["игроки"].values():
-        настройки["провайдер"] = "stub"
+def run_session() -> list[dict]:
+    config = json.loads(json.dumps(CONFIG))
+    config["max_rounds"] = 16
+    config["gm"]["provider"] = "stub"
+    for settings in config["players"].values():
+        settings["provider"] = "stub"
 
-    временная = Path(tempfile.mkdtemp(prefix="нри-тест-"))
-    журнал = Журнал(временная / "лог.jsonl")
-    промпты = Промпты((КОРЕНЬ / конфиг["документ"]).resolve(), КОРЕНЬ)
-    кубики = Кубики(конфиг, конфиг["зерно"])
-    прогон = Прогон(
-        конфиг, промпты, журнал, кубики, {"stub": провайдеры.создать("stub")},
-        Боевка(конфиг, кубики, КОРЕНЬ / "криты.json"),
+    temp = Path(tempfile.mkdtemp(prefix="нри-тест-"))
+    logbook = Logbook(temp / "лог.jsonl")
+    prompts = Prompts((ROOT / config["document"]).resolve(), ROOT)
+    dice = Dice(config, config["seed"])
+    run = Run(
+        config, prompts, logbook, dice, {"stub": providers.create("stub")},
+        Combat(config, dice, ROOT / "crits.json"),
     )
 
-    async def гонка():
-        await прогон.подготовить()
-        await прогон.играть()
-        await прогон.завершить()
+    async def race():
+        await run.setup()
+        await run.play()
+        await run.shutdown()
 
-    asyncio.run(гонка())
-    журнал.закрыть()
-    return прочитать(временная / "лог.jsonl")
+    asyncio.run(race())
+    logbook.close()
+    return read(temp / "лог.jsonl")
 
 
-СОБЫТИЯ = прогнать()
-КРУГИ = {е["круг"]: е for е in СОБЫТИЯ if е["тип_события"] == "круг"}
-ХОДЫ = [е for е in СОБЫТИЯ if е["тип_события"] == "ход"]
-ДОСТАВКИ = [е for е in СОБЫТИЯ if е["тип_события"] == "доставка"]
-АНОМАЛИИ = [е for е in СОБЫТИЯ if е["тип_события"] == "аномалия"]
+EVENTS = run_session()
+ROUNDS = {ev["round"]: ev for ev in EVENTS if ev["event_type"] == "круг"}
+TURNS = [ev for ev in EVENTS if ev["event_type"] == "ход"]
+DELIVERIES = [ev for ev in EVENTS if ev["event_type"] == "доставка"]
+ANOMALIES = [ev for ev in EVENTS if ev["event_type"] == "аномалия"]
 
 
 def тест_ротация_в_разговоре():
-    база = КОНФИГ["базовый_порядок"]
-    разговорные = [е for е in КРУГИ.values() if е["режим"] == "РАЗГОВОР"]
-    assert len(разговорные) >= 5, "сухой прогон не задел пять разговорных кругов"
-    for предыдущий, следующий in zip(разговорные, разговорные[1:]):
-        было = база.index(предыдущий["порядок"][0])
-        стало = база.index(следующий["порядок"][0])
-        assert стало == (было + 1) % len(база), (
-            f"стартовый игрок не сдвинулся: {предыдущий['порядок'][0]} → "
-            f"{следующий['порядок'][0]}"
+    base = CONFIG["base_order"]
+    talk = [ev for ev in ROUNDS.values() if ev["mode"] == "РАЗГОВОР"]
+    assert len(talk) >= 5, "сухой прогон не задел пять разговорных кругов"
+    for previous, following in zip(talk, talk[1:]):
+        before = base.index(previous["order"][0])
+        after = base.index(following["order"][0])
+        assert after == (before + 1) % len(base), (
+            f"стартовый игрок не сдвинулся: {previous['order'][0]} → "
+            f"{following['order'][0]}"
         )
 
 
 def тест_в_действии_ходы_не_доставляются():
-    for круг, событие in КРУГИ.items():
-        if событие["режим"] != "ДЕЙСТВИЕ":
+    for round, event in ROUNDS.items():
+        if event["mode"] != "ДЕЙСТВИЕ":
             continue
-        между_игроками = [
-            д for д in ДОСТАВКИ
-            if д["круг"] == круг and д["от_кого"] in КОНФИГ["базовый_порядок"]
-            and д["кому"] in КОНФИГ["базовый_порядок"]
+        between_players = [
+            dt for dt in DELIVERIES
+            if dt["round"] == round and dt["sender"] in CONFIG["base_order"]
+            and dt["to"] in CONFIG["base_order"]
         ]
-        assert not между_игроками, f"в круге {круг} игроки увидели друг друга в действии"
+        assert not between_players, f"в круге {round} игроки увидели друг друга в действии"
 
 
 def тест_тайный_ход_никому_кроме_мастера():
-    тайные = [х for х in ХОДЫ if х["видимость"] == "только мастеру"]
-    assert тайные, "в сухом прогоне не было ни одного тайного хода"
-    for ход in тайные:
-        утечки = [
-            д for д in ДОСТАВКИ
-            if д["круг"] == ход["круг"] and д["от_кого"] == ход["говорящий"]
-            and д["кому"] != "Мастер"
+    secret = [t for t in TURNS if t["visibility"] == "только мастеру"]
+    assert secret, "в сухом прогоне не было ни одного тайного хода"
+    for turn in secret:
+        leaks = [
+            dt for dt in DELIVERIES
+            if dt["round"] == turn["round"] and dt["sender"] == turn["speaker"]
+            and dt["to"] != "Мастер"
         ]
-        assert not утечки, f"тайный ход {ход['говорящий']} утёк: {утечки}"
-        адресат = [
-            д for д in ДОСТАВКИ
-            if д["круг"] == ход["круг"] and д["от_кого"] == ход["говорящий"]
-            and д["кому"] == "Мастер"
+        assert not leaks, f"тайный ход {turn['speaker']} утёк: {leaks}"
+        recipient = [
+            dt for dt in DELIVERIES
+            if dt["round"] == turn["round"] and dt["sender"] == turn["speaker"]
+            and dt["to"] == "Мастер"
         ]
-        assert адресат, "тайный ход не дошёл до мастера"
+        assert recipient, "тайный ход не дошёл до мастера"
 
 
 def тест_личный_блок_адресный():
-    личные = [х for х in ХОДЫ if х["видимость"].startswith("только ")
-              and х["говорящий"] == "Мастер"]
-    assert личные, "мастер ни разу не выдал личный блок"
-    for ход in личные:
-        кому = ход["видимость"].removeprefix("только ")
-        от_мастера = [
-            д for д in ДОСТАВКИ if д["круг"] == ход["круг"] and д["от_кого"] == "Мастер"
+    private = [t for t in TURNS if t["visibility"].startswith("только ")
+              and t["speaker"] == "Мастер"]
+    assert private, "мастер ни разу не выдал личный блок"
+    for turn in private:
+        to = turn["visibility"].removeprefix("только ")
+        from_gm = [
+            dt for dt in DELIVERIES if dt["round"] == turn["round"] and dt["sender"] == "Мастер"
         ]
         # Троим — только публичная сцена, адресату — сцена и личный блок.
-        счёт = {}
-        for д in от_мастера:
-            счёт[д["кому"]] = счёт.get(д["кому"], 0) + 1
-        assert счёт[кому] == 2, f"{кому} получил {счёт[кому]} сообщений вместо двух"
-        for другой, сколько in счёт.items():
-            if другой != кому:
-                assert сколько == 1, f"{другой} увидел личный блок для {кому}"
+        count = {}
+        for dt in from_gm:
+            count[dt["to"]] = count.get(dt["to"], 0) + 1
+        assert count[to] == 2, f"{to} получил {count[to]} сообщений вместо двух"
+        for other, amount in count.items():
+            if other != to:
+                assert amount == 1, f"{other} увидел личный блок для {to}"
 
 
 def тест_круг_ноль_последователен():
-    нулевые = [х for х in ХОДЫ if х["круг"] == 0 and х["говорящий"] != "Мастер"]
-    assert [х["говорящий"] for х in нулевые] == КОНФИГ["порядок_круга_ноль"]
+    zeroes = [t for t in TURNS if t["round"] == 0 and t["speaker"] != "Мастер"]
+    assert [t["speaker"] for t in zeroes] == CONFIG["round_zero_order"]
     # Каждый ход немедленно уходит троим остальным.
-    for ход in нулевые[:-1]:
-        адресаты = {д["кому"] for д in ДОСТАВКИ
-                    if д["круг"] == 0 and д["от_кого"] == ход["говорящий"]}
-        assert len(адресаты) == 3, f"ход {ход['говорящий']} ушёл не троим: {адресаты}"
+    for turn in zeroes[:-1]:
+        recipients = {dt["to"] for dt in DELIVERIES
+                    if dt["round"] == 0 and dt["sender"] == turn["speaker"]}
+        assert len(recipients) == 3, f"ход {turn['speaker']} ушёл не троим: {recipients}"
 
 
 def тест_мастер_молчит_в_круге_ноль_до_представлений():
-    порядок = [е for е in СОБЫТИЯ if е["тип_события"] == "ход" and е["круг"] == 0]
-    assert порядок[-1]["говорящий"] == "Мастер", "мастер вступил не последним"
-    assert "вводная" in порядок[-1].get("метки", [])
+    order = [ev for ev in EVENTS if ev["event_type"] == "ход" and ev["round"] == 0]
+    assert order[-1]["speaker"] == "Мастер", "мастер вступил не последним"
+    assert "вводная" in order[-1].get("tags", [])
 
 
 def тест_самобросок_пойман_у_обоих():
-    кто = {а["говорящий"] for а in АНОМАЛИИ if "самоброс" in а["метки"]}
-    assert "Мастер" in кто and кто & set(КОНФИГ["базовый_порядок"]), (
-        f"самоброски пойманы не у всех: {кто}"
+    who = {at["speaker"] for at in ANOMALIES if "самоброс" in at["tags"]}
+    assert "Мастер" in who and who & set(CONFIG["base_order"]), (
+        f"самоброски пойманы не у всех: {who}"
     )
 
 
 def тест_пропуск_тега_режима_логируется():
-    assert any("тег_режима_пропущен" in а["метки"] for а in АНОМАЛИИ)
+    assert any("тег_режима_пропущен" in at["tags"] for at in ANOMALIES)
 
 
 def тест_броски_только_от_скрипта():
-    броски = [е for е in СОБЫТИЯ if е["тип_события"] == "бросок"]
-    assert броски, "ни одного броска не сделано"
-    for е in броски:
-        assert е["говорящий"] == "скрипт"
-        assert 1 <= е["бросок"]["выпало"] <= 100
-        assert е["бросок"]["зерно"] == КОНФИГ["зерно"]
+    rolls = [ev for ev in EVENTS if ev["event_type"] == "бросок"]
+    assert rolls, "ни одного броска не сделано"
+    for ev in rolls:
+        assert ev["speaker"] == "скрипт"
+        assert 1 <= ev["roll"]["rolled"] <= 100
+        assert ev["roll"]["seed"] == CONFIG["seed"]
 
 
 def тест_выбытие_исключает_из_круга():
-    выбытия = [е for е in СОБЫТИЯ if е["тип_события"] == "выбытие"]
-    assert выбытия, "в сухом прогоне никто не выбыл"
-    выбывший = выбытия[0]["говорящий"]
-    круг_выбытия = выбытия[0]["круг"]
-    возвращение = next(
-        (е for е in СОБЫТИЯ if е["тип_события"] == "возвращение"
-         and е["говорящий"] == выбывший), None
+    down_events = [ev for ev in EVENTS if ev["event_type"] == "выбытие"]
+    assert down_events, "в сухом прогоне никто не выбыл"
+    down = down_events[0]["speaker"]
+    round_down = down_events[0]["round"]
+    comeback = next(
+        (ev for ev in EVENTS if ev["event_type"] == "возвращение"
+         and ev["speaker"] == down), None
     )
-    assert возвращение, "выбывший так и не вернулся"
+    assert comeback, "выбывший так и не вернулся"
 
-    отсутствовал = range(круг_выбытия + 1, возвращение["круг"] + 1)
-    for круг in отсутствовал:
-        событие = КРУГИ.get(круг)
-        if not событие:
+    absent = range(round_down + 1, comeback["round"] + 1)
+    for round in absent:
+        event = ROUNDS.get(round)
+        if not event:
             continue
-        assert выбывший not in событие["порядок"], (
-            f"выбывшего {выбывший} спросили в круге {круг}"
+        assert down not in event["order"], (
+            f"выбывшего {down} спросили в круге {round}"
         )
-        ходы = [х for х in ХОДЫ if х["круг"] == круг and х["говорящий"] == выбывший]
-        assert not ходы, f"выбывший {выбывший} сходил в круге {круг}"
+        turns = [t for t in TURNS if t["round"] == round and t["speaker"] == down]
+        assert not turns, f"выбывший {down} сходил в круге {round}"
 
 
 def тест_выбывшему_ничего_не_доставляют():
-    выбытия = [е for е in СОБЫТИЯ if е["тип_события"] == "выбытие"]
-    возвращения = [е for е in СОБЫТИЯ if е["тип_события"] == "возвращение"]
-    if not выбытия:
+    down_events = [ev for ev in EVENTS if ev["event_type"] == "выбытие"]
+    comebacks = [ev for ev in EVENTS if ev["event_type"] == "возвращение"]
+    if not down_events:
         return
-    кто, с_круга = выбытия[0]["говорящий"], выбытия[0]["круг"]
-    по_круг = возвращения[0]["круг"] if возвращения else max(КРУГИ) + 1
-    утечки = [д for д in ДОСТАВКИ
-              if д["кому"] == кто and с_круга < д["круг"] <= по_круг]
-    assert not утечки, f"выбывшему {кто} что-то доставили: {утечки[:2]}"
+    who, from_round = down_events[0]["speaker"], down_events[0]["round"]
+    to_round = comebacks[0]["round"] if comebacks else max(ROUNDS) + 1
+    leaks = [dt for dt in DELIVERIES
+              if dt["to"] == who and from_round < dt["round"] <= to_round]
+    assert not leaks, f"выбывшему {who} что-то доставили: {leaks[:2]}"
 
 
 def тест_возвращение_возвращает_в_строй():
-    возвращения = [е for е in СОБЫТИЯ if е["тип_события"] == "возвращение"]
-    assert возвращения
-    кто, круг = возвращения[0]["говорящий"], возвращения[0]["круг"]
-    следующие = [к for н, к in sorted(КРУГИ.items()) if н > круг]
-    assert следующие, "после возвращения не осталось кругов — проверка бессмысленна"
-    assert кто in следующие[0]["порядок"], "вернувшегося не спросили"
+    comebacks = [ev for ev in EVENTS if ev["event_type"] == "возвращение"]
+    assert comebacks
+    who, round = comebacks[0]["speaker"], comebacks[0]["round"]
+    following = [d for n, d in sorted(ROUNDS.items()) if n > round]
+    assert following, "после возвращения не осталось кругов — проверка бессмысленна"
+    assert who in following[0]["order"], "вернувшегося не спросили"
 
 
 def тест_сторожок_залипания():
-    assert any("залипание_режима" in а["метки"] for а in АНОМАЛИИ), (
+    assert any("залипание_режима" in at["tags"] for at in ANOMALIES), (
         "три круга ДЕЙСТВИЯ подряд не дали предупреждения"
     )
 
 
 def тест_счётчик_круга_в_шапке():
     # Мастер должен видеть «Круг N из M» — без этого он не торопится.
-    for номер, событие in КРУГИ.items():
-        шапка = событие.get("шапка_мастеру", "")
-        assert f"Круг {номер} из 16" in шапка, шапка
+    for index, event in ROUNDS.items():
+        header = event.get("header_gm", "")
+        assert f"Круг {index} из 16" in header, header
     # Выбывшие тоже перечислены, иначе мастер забудет, кого не спрашивать.
-    после_выбытия = [е for е in КРУГИ.values() if е.get("выбывшие")]
-    assert после_выбытия and "Выбыли:" in после_выбытия[0]["шапка_мастеру"]
+    after_down = [ev for ev in ROUNDS.values() if ev.get("down")]
+    assert after_down and "Выбыли:" in after_down[0]["header_gm"]
 
 
 def тест_отыграно_кругов_в_итоге():
-    итог = [е for е in СОБЫТИЯ if е["тип_события"] == "итог"][-1]
-    отыграно = итог.get("отыграно_кругов")
-    assert отыграно and set(отыграно) == set(КОНФИГ["базовый_порядок"])
+    total = [ev for ev in EVENTS if ev["event_type"] == "итог"][-1]
+    played = total.get("rounds_played")
+    assert played and set(played) == set(CONFIG["base_order"])
 
 
 def тест_остановка_по_финалу():
-    итог = [е for е in СОБЫТИЯ if е["тип_события"] == "итог"][-1]
-    assert итог["остановка"] == "финал", итог["остановка"]
+    total = [ev for ev in EVENTS if ev["event_type"] == "итог"][-1]
+    assert total["stop"] == "финал", total["stop"]
 
 
 if __name__ == "__main__":
-    провалено = 0
-    for имя, функция in sorted(globals().items()):
-        if имя.startswith("тест_"):
+    failed = 0
+    for name, func in sorted(globals().items()):
+        if name.startswith("тест_"):
             try:
-                функция()
-                print(f"  ok   {имя}")
-            except AssertionError as ошибка:
-                провалено += 1
-                print(f"  ПРОВАЛ {имя}: {ошибка}")
-    print("маршрутизация в порядке" if not провалено else f"провалено: {провалено}")
-    sys.exit(1 if провалено else 0)
+                func()
+                print(f"  ok   {name}")
+            except AssertionError as error:
+                failed += 1
+                print(f"  ПРОВАЛ {name}: {error}")
+    print("маршрутизация в порядке" if not failed else f"провалено: {failed}")
+    sys.exit(1 if failed else 0)

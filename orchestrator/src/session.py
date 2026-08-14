@@ -13,1124 +13,1126 @@ from dataclasses import dataclass, field
 
 from . import parse
 from . import protocol
-from .combat import Боевка
-from .dice import Кубики
-from .logbook import Журнал
-from .prompts import Промпты
-from .providers import настройки as параметры_генерации
-from .providers.base import Ответ, Провайдер, Сессия
+from .combat import Combat
+from .dice import Dice
+from .logbook import Logbook
+from .prompts import Prompts
+from .providers import settings as generation_params
+from .providers.base import Reply, Provider, Session
 
-МАСТЕР = protocol.GM
+GM = protocol.GM
 
 
-class ОстановкаПрогона(RuntimeError):
+class RunStopped(RuntimeError):
     """Агент сломался или не ответил. Лог при этом уже на диске."""
 
 
 @dataclass
-class Ход:
-    персонаж: str
-    текст: str
-    тайно: bool
-    порядок: int
-    метки: list[str] = field(default_factory=list)
-    самобросок: str | None = None
-    отказ: bool = False
+class Turn:
+    character: str
+    text: str
+    secret: bool
+    order: int
+    tags: list[str] = field(default_factory=list)
+    self_roll: str | None = None
+    refusal: bool = False
 
 
-class Прогон:
+class Run:
     def __init__(
         self,
-        конфиг: dict,
-        промпты: Промпты,
-        журнал: Журнал,
-        кубики: Кубики,
-        провайдеры: dict[str, Провайдер],
-        боевка: Боевка | None = None,
-        параметры: параметры_генерации.Параметры | None = None,
+        config: dict,
+        prompts: Prompts,
+        logbook: Logbook,
+        dice: Dice,
+        providers: dict[str, Provider],
+        combat: Combat | None = None,
+        params: generation_params.GenerationParams | None = None,
     ):
-        self.конфиг = конфиг
-        self.параметры = параметры or параметры_генерации.Параметры()
-        self.промпты = промпты
-        self.журнал = журнал
-        self.кубики = кубики
-        self.провайдеры = провайдеры
-        self.боевка = боевка
+        self.config = config
+        self.params = params or generation_params.GenerationParams()
+        self.prompts = prompts
+        self.logbook = logbook
+        self.dice = dice
+        self.providers = providers
+        self.combat = combat
 
-        self.имена: list[str] = list(конфиг["базовый_порядок"])
-        self.сессии: dict[str, Сессия] = {}
-        self.очередь: dict[str, list[str]] = {МАСТЕР: []}
-        self.очередь.update({имя: [] for имя in self.имена})
+        self.names: list[str] = list(config["base_order"])
+        self.sessions: dict[str, Session] = {}
+        self.queue: dict[str, list[str]] = {GM: []}
+        self.queue.update({name: [] for name in self.names})
 
-        self.круг = 0
-        self.режим = конфиг.get("режим_по_умолчанию", protocol.DEFAULT_MODE)
-        self.разговорных_кругов = 0
-        self.остановка: str | None = None
+        self.round = 0
+        self.mode = config.get("default_mode", protocol.DEFAULT_MODE)
+        self.talk_rounds = 0
+        self.stop: str | None = None
         # Выбывший — это мёртвый, без сознания или тот, чья история кончилась.
         # Если персонаж слышит и видит происходящее, он не выбыл и ходит как все.
-        self.выбывшие: dict[str, dict] = {}
-        self.отыграно: dict[str, int] = {имя: 0 for имя in self.имена}
-        self.действий_подряд = 0
-        self._контекст: dict[str, int] = {}
+        self.down: dict[str, dict] = {}
+        self.played: dict[str, int] = {name: 0 for name in self.names}
+        self.actions_in_row = 0
+        self._context: dict[str, int] = {}
 
-        self.счётчики = {
-            имя: {"ходов": 0, "тайных": 0, "самобросков": 0, "символов": 0}
-            for имя in self.имена + [МАСТЕР]
+        self.counters = {
+            name: {"turns": 0, "тайных": 0, "self_rolls": 0, "chars": 0}
+            for name in self.names + [GM]
         }
-        self.токенов = {"вход": 0, "выход": 0, "кэш_запись": 0, "кэш_чтение": 0,
-                        "размышление": 0}
+        self.token_totals = {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0,
+                        "reasoning": 0}
         # Отдельный счётчик на каждого вендора: без него нельзя сказать, сколько
         # стоил прогон у кого, а это половина статьи.
-        self.по_провайдерам: dict[str, dict] = {}
-        self.отказы: list[dict] = []
-        self.фактические_модели: dict[str, str] = {}
-        self.стоимость = 0.0
+        self.provider_totals: dict[str, dict] = {}
+        self.refusals: list[dict] = []
+        self.actual_models: dict[str, str] = {}
+        self.cost = 0.0
         # Числа, которые скрипт выдал сам. Их пересказ моделью — не самоброс.
-        self.выданные_числа: set[int] = set()
-        self.ожидают_судьбу: list[str] = []
+        self.issued_numbers: set[int] = set()
+        self.fate_queue: list[str] = []
         # Заявки на Удачу. Игроки ходят раньше, чем мастер объявит проверки,
         # поэтому переброс заявляется наперёд: «если провалю — перекину».
         # Заявка живёт один круг и сгорает вместе с ним.
-        self.заявки_удачи: dict[str, str] = {}
+        self.claims_fortune: dict[str, str] = {}
         # Заявки на Судьбу: имя → выбранное игроком значение на кубах.
-        self.заявки_судьбы: dict[str, int] = {}
+        self.claims_fate: dict[str, int] = {}
         # Провалы игроков, которые можно было перебросить за Удачу. Нужны,
         # чтобы упрёк «доиграл с полными руками» можно было проверить: без
         # этого числа непонятно, была ли у игрока возможность потратить.
-        self.провалы_игроков: dict[str, int] = {имя: 0 for имя in self.имена}
+        self.player_failures: dict[str, int] = {name: 0 for name in self.names}
         # Что скрипт подтвердил, а что только прозвучало. Разница между этими
         # двумя числами — главное, чего не хватало прошлым прогонам: судья
         # засчитывал за трату слова, за которыми ничего не стояло.
-        self.ресурсы_события: list[dict] = []
+        self.resources_events: list[dict] = []
         # Порча русского по игрокам: чужие слова и подменённые буквы. Идёт
         # судье как минус модели — он читает транскрипт и такое не ловит.
-        self.порча_языка: dict[str, dict] = {}
+        self.corruption_language: dict[str, dict] = {}
 
     # --- подготовка -------------------------------------------------------
 
-    async def подготовить(self) -> None:
-        мастер = self.конфиг["мастер"]
-        self.сессии[МАСТЕР] = await self.провайдеры[мастер["провайдер"]].открыть(
-            МАСТЕР, self.промпты.мастеру(), мастер["модель"]
+    async def setup(self) -> None:
+        gm_config = self.config["gm"]
+        self.sessions[GM] = await self.providers[gm_config["provider"]].open(
+            GM, self.prompts.gm(), gm_config["model"]
         )
-        for имя in self.имена:
-            настройки = self.конфиг["игроки"][имя]
-            self.сессии[имя] = await self.провайдеры[настройки["провайдер"]].открыть(
-                имя, self.промпты.игроку(имя), настройки["модель"]
+        for name in self.names:
+            settings = self.config["players"][name]
+            self.sessions[name] = await self.providers[settings["provider"]].open(
+                name, self.prompts.player(name), settings["model"]
             )
 
-        self.журнал.записать(
+        self.logbook.write(
             "старт",
-            зерно=self.кубики.зерно,
-            подкрутка_дублей=self.кубики.доля_дублей or None,
-            предел_кругов=self.конфиг["предел_кругов"],
-            режим=self.режим,
-            состав={
-                МАСТЕР: self.конфиг["мастер"],
-                **{имя: self.конфиг["игроки"][имя] for имя in self.имена},
+            seed=self.dice.seed,
+            rigging_doubles=self.dice.doubles_share or None,
+            max_rounds=self.config["max_rounds"],
+            mode=self.mode,
+            cast={
+                GM: self.config["gm"],
+                **{name: self.config["players"][name] for name in self.names},
             },
-            контрольный_игрок=self.конфиг.get("контрольный_игрок"),
-            промпты=self.промпты.сводка(),
+            control_player=self.config.get("control_player"),
+            prompts=self.prompts.summary(),
             # Условия сравнения объявляются до первого хода, а не подгоняются
             # после. Зритель должен видеть, что у всех четверых одно и то же.
-            параметры_генерации=параметры_генерации.блок_параметров(
-                self.параметры,
-                {МАСТЕР: self.конфиг["мастер"]["провайдер"],
-                 **{имя: self.конфиг["игроки"][имя]["провайдер"] for имя in self.имена}},
+            generation_params=generation_params.block_params(
+                self.params,
+                {GM: self.config["gm"]["provider"],
+                 **{name: self.config["players"][name]["provider"] for name in self.names}},
             ),
         )
 
-    async def завершить(self) -> None:
-        for провайдер in self.провайдеры.values():
-            await провайдер.завершить()
+    async def shutdown(self) -> None:
+        for provider in self.providers.values():
+            await provider.shutdown()
 
     @property
-    def активные(self) -> list[str]:
-        return [имя for имя in self.имена if имя not in self.выбывшие]
+    def active(self) -> list[str]:
+        return [name for name in self.names if name not in self.down]
 
     # --- доставка ---------------------------------------------------------
 
-    def доставить(self, кому: str, текст: str, от_кого: str) -> None:
-        текст = текст.strip()
-        if not текст:
+    def deliver(self, to: str, text: str, sender: str) -> None:
+        text = text.strip()
+        if not text:
             return
-        if кому in self.выбывшие:
+        if to in self.down:
             # Выбывшему не доставляется ничего: он не воспринимает сцену.
             return
-        self.очередь[кому].append(текст)
-        self.журнал.доставка(круг=self.круг, от_кого=от_кого, кому=кому, символов=len(текст))
+        self.queue[to].append(text)
+        self.logbook.delivery(round=self.round, sender=sender, to=to, chars=len(text))
 
-    async def спросить(self, агент: str, подсказка: str) -> Ответ:
-        тело = "\n\n".join(self.очередь[агент] + [подсказка])
-        self.очередь[агент] = []
+    async def ask(self, agent: str, hint: str) -> Reply:
+        body = "\n\n".join(self.queue[agent] + [hint])
+        self.queue[agent] = []
         # Размер отправленного — в лог: по нему видно, где начинается разгон.
-        self._контекст[агент] = len(тело)
+        self._context[agent] = len(body)
 
-        попыток = max(1, int(self.конфиг.get("попыток_на_агента", 2)))
-        последняя: Exception | None = None
-        for попытка in range(1, попыток + 1):
+        attempts = max(1, int(self.config.get("attempts_per_agent", 2)))
+        last: Exception | None = None
+        for attempt in range(1, attempts + 1):
             try:
-                ответ = await self.сессии[агент].отправить(тело)
-            except Exception as ошибка:  # сеть, лимиты, падение SDK
-                последняя = ошибка
-                self.журнал.аномалия(
-                    круг=self.круг, кто=агент, метка="ошибка_агента",
-                    подробности=f"попытка {попытка}: {ошибка!r}",
+                reply = await self.sessions[agent].send(body)
+            except Exception as error:  # сеть, лимиты, падение SDK
+                last = error
+                self.logbook.anomaly(
+                    round=self.round, who=agent, tag="ошибка_агента",
+                    details=f"попытка {attempt}: {error!r}",
                 )
-                await asyncio.sleep(2 * попытка)
+                await asyncio.sleep(2 * attempt)
                 continue
 
             # Отказ повторять нельзя ни при каких обстоятельствах, даже если он
             # пришёл с пустым текстом. Тихий ретрай спрячет ровно то, ради чего
             # прогон затевался: как разные вендоры ведут себя на мрачной сцене.
-            if "отказ" in ответ.метки:
-                self._учесть(ответ)
-                self._запомнить_модель(агент, ответ)
-                return ответ
+            if "отказ" in reply.tags:
+                self._count(reply)
+                self._remember_model(agent, reply)
+                return reply
 
-            if ответ.текст.strip():
-                self._учесть(ответ)
-                self._запомнить_модель(агент, ответ)
-                return ответ
+            if reply.text.strip():
+                self._count(reply)
+                self._remember_model(agent, reply)
+                return reply
 
-            последняя = RuntimeError("пустой ответ")
-            self.журнал.аномалия(
-                круг=self.круг, кто=агент, метка="пустой_ответ",
-                подробности=f"попытка {попытка}",
+            last = RuntimeError("пустой ответ")
+            self.logbook.anomaly(
+                round=self.round, who=agent, tag="пустой_ответ",
+                details=f"попытка {attempt}",
             )
 
-        raise ОстановкаПрогона(f"агент {агент} не ответил: {последняя!r}")
+        raise RunStopped(f"агент {agent} не ответил: {last!r}")
 
-    def _запомнить_модель(self, агент: str, ответ: Ответ) -> None:
-        if ответ.модель_факт:
-            self.фактические_модели[агент] = ответ.модель_факт
+    def _remember_model(self, agent: str, reply: Reply) -> None:
+        if reply.model_actual:
+            self.actual_models[agent] = reply.model_actual
 
     # Вендорское имя поля → наше. Сторонние адаптеры приводят usage к общему виду
     # сами, у Claude он приходит как есть из SDK.
-    ПОЛЯ_ТОКЕНОВ = (
-        ("input_tokens", "вход"), ("output_tokens", "выход"),
-        ("cache_creation_input_tokens", "кэш_запись"),
-        ("cache_read_input_tokens", "кэш_чтение"),
-        ("вход", "вход"), ("выход", "выход"),
-        ("кэш_запись", "кэш_запись"), ("кэш_чтение", "кэш_чтение"),
-        ("размышление", "размышление"),
+    FIELDS_TOKENS = (
+        # Слева — как поле зовёт вендор, справа — как оно зовётся у нас.
+        ("input_tokens", "input"), ("output_tokens", "output"),
+        ("cache_creation_input_tokens", "cache_write"),
+        ("cache_read_input_tokens", "cache_read"),
+        ("input", "input"), ("output", "output"),
+        ("cache_write", "cache_write"), ("cache_read", "cache_read"),
+        ("reasoning", "reasoning"),
     )
 
-    def _учесть(self, ответ: Ответ) -> None:
-        if ответ.стоимость:
-            self.стоимость += ответ.стоимость
+    def _count(self, reply: Reply) -> None:
+        if reply.cost:
+            self.cost += reply.cost
 
-        учтено = {"вход": 0, "выход": 0, "кэш_запись": 0, "кэш_чтение": 0,
-                  "размышление": 0}
-        токены = ответ.токены or {}
+        counted = {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0,
+                  "reasoning": 0}
+        tokens = reply.tokens or {}
         # Основной объём уходит в кэш, а не в input_tokens: без этих двух полей
         # счётчик показывает полсотни токенов на прогон и врёт про расход.
-        for ключ, куда in self.ПОЛЯ_ТОКЕНОВ:
-            if isinstance(токены.get(ключ), int):
-                учтено[куда] += токены[ключ]
+        for key, field in self.FIELDS_TOKENS:
+            if isinstance(tokens.get(key), int):
+                counted[field] += tokens[key]
 
-        for куда, сколько in учтено.items():
-            self.токенов[куда] += сколько
+        for field, amount in counted.items():
+            self.token_totals[field] += amount
 
-        строка = self.по_провайдерам.setdefault(
-            ответ.провайдер,
-            {"вход": 0, "выход": 0, "кэш_запись": 0, "кэш_чтение": 0,
-             "размышление": 0, "запросов": 0, "отказов": 0, "деньги_usd": 0.0,
-             "модели": []},
+        row = self.provider_totals.setdefault(
+            reply.provider,
+            {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0,
+             "reasoning": 0, "requests": 0, "refusals": 0, "cost_usd": 0.0,
+             "models": []},
         )
-        for куда, сколько in учтено.items():
-            строка[куда] += сколько
-        строка["запросов"] += 1
-        строка["деньги_usd"] += ответ.стоимость or 0.0
-        if "отказ" in ответ.метки:
-            строка["отказов"] += 1
-        модель = ответ.модель_факт or ответ.модель
-        if модель and модель not in строка["модели"]:
-            строка["модели"].append(модель)
+        for field, amount in counted.items():
+            row[field] += amount
+        row["requests"] += 1
+        row["cost_usd"] += reply.cost or 0.0
+        if "отказ" in reply.tags:
+            row["refusals"] += 1
+        model = reply.model_actual or reply.model
+        if model and model not in row["models"]:
+            row["models"].append(model)
 
     # --- круг ноль --------------------------------------------------------
 
-    async def круг_ноль(self) -> None:
-        порядок = self.конфиг["порядок_круга_ноль"]
-        сцена = self.промпты.круг_ноль
+    async def round_zero(self) -> None:
+        order = self.config["round_zero_order"]
+        scene = self.prompts.round_zero
 
-        for имя in порядок:
-            self.доставить(имя, сцена, "посредник")
+        for name in order:
+            self.deliver(name, scene, "посредник")
 
-        ходы: list[Ход] = []
-        for номер, имя in enumerate(порядок, 1):
-            ответ = await self.спросить(имя, "Твой ход.")
-            ход = self._разобрать_ход(имя, ответ, номер, режим="КРУГ_НОЛЬ")
-            ходы.append(ход)
+        turns: list[Turn] = []
+        for index, name in enumerate(order, 1):
+            reply = await self.ask(name, "Твой ход.")
+            turn = self._parse_turn(name, reply, index, mode="КРУГ_НОЛЬ")
+            turns.append(turn)
             # Ход немедленно уходит троим остальным: иначе персонажи говорят
             # в пустоту и не отвечают на обращения.
-            for другой in порядок:
-                if другой != имя:
-                    self.доставить(другой, f"ХОД ИГРОКА — {имя.upper()}:\n{ход.текст}", имя)
+            for other in order:
+                if other != name:
+                    self.deliver(other, f"ХОД ИГРОКА — {name.upper()}:\n{turn.text}", name)
 
-        self.доставить(МАСТЕР, self._свод_ходов(ходы, "Круг ноль, вечер накануне."), "посредник")
-        await self._сцена_мастера(вводная=True)
+        self.deliver(GM, self._summary_turns(turns, "Круг ноль, вечер накануне."), "посредник")
+        await self._scene_gm(briefing=True)
 
     # --- продолжение прерванного прогона ----------------------------------
 
-    def продолжить(self, история: dict[str, str], состояние) -> None:
+    def resume(self, history: dict[str, str], state) -> None:
         """Подаёт каждому агенту его историю и восстанавливает состояние круга."""
-        self.круг = состояние.последний_круг
-        self.режим = состояние.режим
-        self.разговорных_кругов = состояние.разговорных_кругов
-        self.выданные_числа = set(состояние.выданные_числа)
-        for агент, текст in история.items():
-            self.доставить(агент, текст, "посредник")
-        self.журнал.записать(
+        self.round = state.last_round
+        self.mode = state.mode
+        self.talk_rounds = state.talk_rounds
+        self.issued_numbers = set(state.issued_numbers)
+        for agent, text in history.items():
+            self.deliver(agent, text, "посредник")
+        self.logbook.write(
             "продолжение",
-            круг=self.круг,
-            режим=self.режим,
-            разговорных_кругов=self.разговорных_кругов,
-            источник=состояние.источник,
-            подано_символов={агент: len(т) for агент, т in история.items()},
+            round=self.round,
+            mode=self.mode,
+            talk_rounds=self.talk_rounds,
+            source=state.source,
+            sent_chars={agent: len(tx) for agent, tx in history.items()},
         )
 
     # --- основной цикл ----------------------------------------------------
 
-    async def играть(self, с_круга_ноль: bool = True) -> None:
+    async def play(self, s_round_zero: bool = True) -> None:
         try:
-            if с_круга_ноль:
-                await self.круг_ноль()
-            предел = int(self.конфиг["предел_кругов"])
-            while self.остановка is None and self.круг < предел:
-                self.круг += 1
-                await self._круг()
-            if self.остановка is None:
-                self.остановка = "предел_кругов"
-        except ОстановкаПрогона as стоп:
-            self.остановка = f"сбой: {стоп}"
-            self.журнал.аномалия(круг=self.круг, кто="скрипт", метка="остановка",
-                                 подробности=str(стоп))
+            if s_round_zero:
+                await self.round_zero()
+            limit = int(self.config["max_rounds"])
+            while self.stop is None and self.round < limit:
+                self.round += 1
+                await self._round()
+            if self.stop is None:
+                self.stop = "предел_кругов"
+        except RunStopped as halt:
+            self.stop = f"сбой: {halt}"
+            self.logbook.anomaly(round=self.round, who="скрипт", tag="остановка",
+                                 details=str(halt))
         finally:
-            self._итоги()
+            self._totals()
 
-    def _нажим(self) -> None:
+    def _nudge(self) -> None:
         """Подталкивает мастера к развязке: сам он не торопится.
 
         В модуле таймер до полудня прописан, но мастер им не пользуется, и
         сессия упирается в предел кругов посреди сцены.
         """
-        мягкий = self.конфиг.get("финал_с_круга")
-        жёсткий = self.конфиг.get("жёсткий_финал_с_круга")
-        if жёсткий and self.круг >= жёсткий:
-            осталось = int(self.конфиг["предел_кругов"]) - self.круг
-            self.доставить(
-                МАСТЕР,
+        soft = self.config.get("finale_from_round")
+        hard = self.config.get("hard_finale_from_round")
+        if hard and self.round >= hard:
+            left = int(self.config["max_rounds"]) - self.round
+            self.deliver(
+                GM,
                 "СЛУЖЕБНОЕ. Сессия заканчивается: осталось кругов "
-                f"{max(осталось, 1)}. Доведи историю до развязки в этой сцене "
+                f"{max(left, 1)}. Доведи историю до развязки в этой сцене "
                 "или в следующей и поставь [ФИНАЛ]. Что партия скажет патрулю — "
                 "то и станет правдой; не подсказывай ей правильный ответ.",
                 "скрипт",
             )
-        elif мягкий and self.круг >= мягкий:
-            self.доставить(
-                МАСТЕР,
+        elif soft and self.round >= soft:
+            self.deliver(
+                GM,
                 "СЛУЖЕБНОЕ. Полдень близко: солнце высоко, лошади беспокойны, "
                 "на дороге со стороны моста пыль. Веди историю к развязке, "
                 "поднимай цену промедления.",
                 "скрипт",
             )
 
-    def _сторожок_режима(self) -> None:
+    def _watchdog_mode(self) -> None:
         """Три ДЕЙСТВИЯ подряд — диалог умер, а на нём держится ролик."""
-        if self.режим == "ДЕЙСТВИЕ":
-            self.действий_подряд += 1
+        if self.mode == "ДЕЙСТВИЕ":
+            self.actions_in_row += 1
             # Предупреждаем на третьем круге и дальше каждый третий: длинный бой
             # — законная причина, а не повод засорять монтажный лист.
-            if self.действий_подряд >= 3 and self.действий_подряд % 3 == 0:
-                self.журнал.аномалия(
-                    круг=self.круг, кто=МАСТЕР, метка="залипание_режима",
-                    подробности=f"кругов ДЕЙСТВИЯ подряд: {self.действий_подряд}",
+            if self.actions_in_row >= 3 and self.actions_in_row % 3 == 0:
+                self.logbook.anomaly(
+                    round=self.round, who=GM, tag="залипание_режима",
+                    details=f"кругов ДЕЙСТВИЯ подряд: {self.actions_in_row}",
                 )
         else:
-            self.действий_подряд = 0
+            self.actions_in_row = 0
 
-    async def _круг(self) -> None:
-        порядок = self._порядок_хода()
-        self._сторожок_режима()
+    async def _round(self) -> None:
+        order = self._order_turn()
+        self._watchdog_mode()
 
-        if self.боевка:
+        if self.combat:
             # Иммунитет от Решимости живёт один круг и гаснет здесь, до бросков.
-            self.боевка.новый_круг()
+            self.combat.fresh_round()
             # Проверки кровотечения скрипт объявляет сам, не дожидаясь мастера.
-            кровь = await self._кровотечение()
-            if кровь:
-                self.доставить(МАСТЕР, "Кровотечение:\n" + "\n".join(кровь), "скрипт")
+            blood = await self._bleeding()
+            if blood:
+                self.deliver(GM, "Кровотечение:\n" + "\n".join(blood), "скрипт")
             # Строка остатка идёт КАЖДЫЙ круг и каждому, даже когда всё цело.
             # Ресурс, названный один раз в карточке, к двадцатому кругу для
             # модели не существует — это свойство подачи, а не модели.
-            for имя in порядок:
-                self.доставить(имя, self.боевка.сводка_игроку(имя), "скрипт")
-            сводка_ресурсов = self.боевка.сводка_ресурсов(порядок)
-            if сводка_ресурсов:
-                self.доставить(МАСТЕР, сводка_ресурсов, "скрипт")
-        self.журнал.записать(
-            "круг", круг=self.круг, режим=self.режим, порядок=порядок,
-            выбывшие=sorted(self.выбывшие) or None,
-            шапка_мастеру=self._шапка_круга(),
+            for name in order:
+                self.deliver(name, self.combat.summary_player(name), "скрипт")
+            summary_resources = self.combat.summary_resources(order)
+            if summary_resources:
+                self.deliver(GM, summary_resources, "скрипт")
+        self.logbook.write(
+            "круг", round=self.round, mode=self.mode, order=order,
+            down=sorted(self.down) or None,
+            header_gm=self._header_round(),
         )
-        ходы = await self._собрать_ходы(порядок)
-        шапка = self._шапка_круга()
-        self.доставить(МАСТЕР, self._свод_ходов(ходы, шапка), "посредник")
-        if self.боевка:
-            сводка = self.боевка.сводка_мастеру()
-            if сводка:
-                self.доставить(МАСТЕР, сводка, "скрипт")
-        self._нажим()
-        for ход in ходы:
-            if ход.тайно:
-                self.доставить(МАСТЕР, f"ТАЙНЫЙ ХОД, только {ход.персонаж}: {ход.текст}", ход.персонаж)
-            if ход.самобросок:
-                настоящий = self.кубики.подставной()
-                self.выданные_числа.add(настоящий)
-                self.доставить(
-                    МАСТЕР,
-                    f"Бросок игрока {ход.персонаж} недействителен, он его не кидает. "
-                    f"Настоящий результат: {настоящий}.",
+        turns = await self._build_turns(order)
+        header = self._header_round()
+        self.deliver(GM, self._summary_turns(turns, header), "посредник")
+        if self.combat:
+            summary = self.combat.summary_gm()
+            if summary:
+                self.deliver(GM, summary, "скрипт")
+        self._nudge()
+        for turn in turns:
+            if turn.secret:
+                self.deliver(GM, f"ТАЙНЫЙ ХОД, только {turn.character}: {turn.text}", turn.character)
+            if turn.self_roll:
+                real = self.dice.fake()
+                self.issued_numbers.add(real)
+                self.deliver(
+                    GM,
+                    f"Бросок игрока {turn.character} недействителен, он его не кидает. "
+                    f"Настоящий результат: {real}.",
                     "скрипт",
                 )
-        await self._сцена_мастера()
+        await self._scene_gm()
 
-        if self.боевка and self.ожидают_судьбу:
-            исходы = await self._спросить_судьбу()
-            if исходы:
-                self.доставить(МАСТЕР, "Судьба:\n" + "\n".join(исходы), "скрипт")
-                for имя in self.активные:
-                    self.доставить(имя, "\n".join(исходы), "скрипт")
+        if self.combat and self.fate_queue:
+            outcomes = await self._ask_fate()
+            if outcomes:
+                self.deliver(GM, "Судьба:\n" + "\n".join(outcomes), "скрипт")
+                for name in self.active:
+                    self.deliver(name, "\n".join(outcomes), "скрипт")
 
-    def _порядок_хода(self) -> list[str]:
-        база = [имя for имя in self.конфиг["базовый_порядок"] if имя in self.активные]
-        if not база:
+    def _order_turn(self) -> list[str]:
+        base = [name for name in self.config["base_order"] if name in self.active]
+        if not base:
             return []
-        if self.режим != protocol.TALK:
-            return база
+        if self.mode != protocol.TALK:
+            return base
         # Ротация: иначе тот, кто всегда ходит последним, видит троих и
         # выглядит умнее — это исказило бы скоринг.
-        сдвиг = self.разговорных_кругов % len(база)
-        self.разговорных_кругов += 1
-        return база[сдвиг:] + база[:сдвиг]
+        offset = self.talk_rounds % len(base)
+        self.talk_rounds += 1
+        return base[offset:] + base[:offset]
 
-    async def _собрать_ходы(self, порядок: list[str]) -> list[Ход]:
-        ходы: list[Ход] = []
+    async def _build_turns(self, order: list[str]) -> list[Turn]:
+        turns: list[Turn] = []
 
-        if self.режим == protocol.TALK:
-            for номер, имя in enumerate(порядок, 1):
-                ответ = await self.спросить(имя, "Твой ход.")
-                ход = self._разобрать_ход(имя, ответ, номер)
-                ходы.append(ход)
-                if not ход.тайно:
-                    for другой in порядок:
-                        if другой != имя:
-                            self.доставить(
-                                другой, f"ХОД ИГРОКА — {имя.upper()}:\n{ход.текст}", имя
+        if self.mode == protocol.TALK:
+            for index, name in enumerate(order, 1):
+                reply = await self.ask(name, "Твой ход.")
+                turn = self._parse_turn(name, reply, index)
+                turns.append(turn)
+                if not turn.secret:
+                    for other in order:
+                        if other != name:
+                            self.deliver(
+                                other, f"ХОД ИГРОКА — {name.upper()}:\n{turn.text}", name
                             )
-            return ходы
+            return turns
 
         # ДЕЙСТВИЕ: параллельно и вслепую, друг друга не видят.
-        результаты = await asyncio.gather(
-            *(self.спросить(имя, "Твой ход.") for имя in порядок),
+        results = await asyncio.gather(
+            *(self.ask(name, "Твой ход.") for name in order),
             return_exceptions=True,
         )
-        for номер, (имя, результат) in enumerate(zip(порядок, результаты), 1):
-            if isinstance(результат, BaseException):
-                raise ОстановкаПрогона(f"агент {имя}: {результат!r}")
-            ходы.append(self._разобрать_ход(имя, результат, номер))
-        return ходы
+        for index, (name, result) in enumerate(zip(order, results), 1):
+            if isinstance(result, BaseException):
+                raise RunStopped(f"агент {name}: {result!r}")
+            turns.append(self._parse_turn(name, result, index))
+        return turns
 
-    def _разобрать_ход(self, имя: str, ответ: Ответ, номер: int, режим: str | None = None) -> Ход:
-        текст = ответ.текст.strip()
-        метки = list(ответ.метки)
+    def _parse_turn(self, name: str, reply: Reply, index: int, mode: str | None = None) -> Turn:
+        text = reply.text.strip()
+        tags = list(reply.tags)
 
         # Отказ: в лог целиком, за стол — ничего. Текст отказа не должен попасть
         # ни мастеру, ни другим игрокам, иначе он утечёт в сцену и испортит её
         # всем четверым. Персонаж просто промолчал, круг идёт дальше.
-        if "отказ" in метки:
-            self.счётчики[имя]["ходов"] += 1
-            self.отыграно[имя] = self.круг
-            self.журнал.ход(
-                круг=self.круг, режим=режим or self.режим, говорящий=имя,
-                порядок_в_круге=номер, видимость="никому (отказ)", текст=текст,
-                метки=метки, провайдер=ответ.провайдер,
-                модель=ответ.модель_факт or ответ.модель,
-                латентность_мс=ответ.латентность_мс, токены=ответ.токены,
-                стоимость=ответ.стоимость, контекст_символов=self._контекст.get(имя),
+        if "отказ" in tags:
+            self.counters[name]["turns"] += 1
+            self.played[name] = self.round
+            self.logbook.turn(
+                round=self.round, mode=mode or self.mode, speaker=name,
+                order_in_round=index, visibility="никому (отказ)", text=text,
+                tags=tags, provider=reply.provider,
+                model=reply.model_actual or reply.model,
+                latency_ms=reply.latency_ms, tokens=reply.tokens,
+                cost=reply.cost, context_chars=self._context.get(name),
             )
-            self.отказы.append({
-                "круг": self.круг, "кто": имя, "провайдер": ответ.провайдер,
-                "модель": ответ.модель_факт or ответ.модель,
-                "цитата": " ".join(текст.split())[:300],
+            self.refusals.append({
+                "round": self.round, "who": name, "provider": reply.provider,
+                "model": reply.model_actual or reply.model,
+                "quote": " ".join(text.split())[:300],
             })
-            return Ход(имя, "", False, номер, метки, None, отказ=True)
+            return Turn(name, "", False, index, tags, None, refusal=True)
 
-        тайно = parse.тайный_ход(текст)
-        самобросок = None
-        метки += self._разобрать_траты(имя, текст)
+        secret = parse.secret_turn(text)
+        self_roll = None
+        tags += self._parse_spends(name, text)
 
         # Порча русского — минус модели, и судья должен его видеть числом.
         # Целиком нерусская реплика заметна и так, а подменённая буква внутри
         # слова не заметна вовсе, поэтому считает её скрипт, а не глаз.
-        порча = parse.порча_языка(текст)
-        if порча["испорчено"]:
-            метки.append("порча_языка")
-            строка = self.порча_языка.setdefault(
-                имя, {"реплик": 0, "смешанные_слова": [], "целиком_не_по_русски": 0})
-            строка["реплик"] += 1
-            строка["целиком_не_по_русски"] += int(порча["целиком_не_по_русски"])
-            for слово in порча["смешанные_слова"]:
-                if слово not in строка["смешанные_слова"]:
-                    строка["смешанные_слова"].append(слово)
-            self.журнал.записать(
-                "порча_языка", круг=self.круг, кто=имя,
-                смешанные_слова=порча["смешанные_слова"] or None,
-                целиком_не_по_русски=порча["целиком_не_по_русски"] or None,
-                цитата=" ".join(текст.split())[:200],
+        corruption = parse.corruption_language(text)
+        if corruption["испорчено"]:
+            tags.append("порча_языка")
+            row = self.corruption_language.setdefault(
+                name, {"lines": 0, "mixed_words": [], "wholly_not_russian": 0})
+            row["lines"] += 1
+            row["wholly_not_russian"] += int(corruption["wholly_not_russian"])
+            for word in corruption["mixed_words"]:
+                if word not in row["mixed_words"]:
+                    row["mixed_words"].append(word)
+            self.logbook.write(
+                "порча_языка", round=self.round, who=name,
+                mixed_words=corruption["mixed_words"] or None,
+                wholly_not_russian=corruption["wholly_not_russian"] or None,
+                quote=" ".join(text.split())[:200],
             )
 
-        фрагменты = parse.самоброски(текст, self.выданные_числа)
-        if фрагменты:
-            самобросок = "; ".join(фрагменты)
-            метки.append("самоброс")
-            self.счётчики[имя]["самобросков"] += 1
-            self.журнал.аномалия(круг=self.круг, кто=имя, метка="самоброс",
-                                 подробности=самобросок)
+        fragments = parse.self_rolls(text, self.issued_numbers)
+        if fragments:
+            self_roll = "; ".join(fragments)
+            tags.append("самоброс")
+            self.counters[name]["self_rolls"] += 1
+            self.logbook.anomaly(round=self.round, who=name, tag="самоброс",
+                                 details=self_roll)
 
-        if тайно:
-            метки.append("тайный_ход")
-            self.счётчики[имя]["тайных"] += 1
+        if secret:
+            tags.append("тайный_ход")
+            self.counters[name]["тайных"] += 1
 
-        self.счётчики[имя]["ходов"] += 1
-        self.счётчики[имя]["символов"] += len(текст)
-        self.отыграно[имя] = self.круг
+        self.counters[name]["turns"] += 1
+        self.counters[name]["chars"] += len(text)
+        self.played[name] = self.round
 
-        self.журнал.ход(
-            круг=self.круг,
-            режим=режим or self.режим,
-            говорящий=имя,
-            порядок_в_круге=номер,
-            видимость="только мастеру" if тайно else "всем",
-            текст=текст,
-            метки=метки,
-            провайдер=ответ.провайдер,
-            модель=ответ.модель_факт or ответ.модель,
-            латентность_мс=ответ.латентность_мс,
-            токены=ответ.токены,
-            стоимость=ответ.стоимость,
-            контекст_символов=self._контекст.get(имя),
+        self.logbook.turn(
+            round=self.round,
+            mode=mode or self.mode,
+            speaker=name,
+            order_in_round=index,
+            visibility="только мастеру" if secret else "всем",
+            text=text,
+            tags=tags,
+            provider=reply.provider,
+            model=reply.model_actual or reply.model,
+            latency_ms=reply.latency_ms,
+            tokens=reply.tokens,
+            cost=reply.cost,
+            context_chars=self._context.get(name),
         )
-        return Ход(имя, текст, тайно, номер, метки, самобросок)
+        return Turn(name, text, secret, index, tags, self_roll)
 
-    def _записать_ресурс(self, событие: dict) -> None:
-        self.ресурсы_события.append(событие)
-        self.журнал.записать("ресурс", **событие)
+    def _write_resource(self, event: dict) -> None:
+        self.resources_events.append(event)
+        self.logbook.write("ресурс", **event)
 
-    def _разобрать_траты(self, имя: str, текст: str) -> list[str]:
+    def _parse_spends(self, name: str, text: str) -> list[str]:
         """Заявки игрока на ресурсы. Заявка — ещё не трата.
 
         Списывает скрипт и только если есть чем. Несостоявшаяся заявка тоже
         идёт в лог: именно на смешении заявленного и подтверждённого сгорел
         прошлый прогон, где судья зачёл за трату слова «Трачу Удачу».
         """
-        if not self.боевка or имя not in self.боевка.бойцы:
+        if not self.combat or name not in self.combat.combatants:
             return []
-        метки: list[str] = []
-        for ресурс in parse.траты(текст):
-            основа = {"круг": self.круг, "кто": имя, "ресурс": ресурс,
-                      "вид": "трата", "заявлено": True}
+        tags: list[str] = []
+        for resource in parse.spends(text):
+            stem = {"round": self.round, "who": name, "resource": resource,
+                      "variant": "трата", "заявлено": True}
 
-            if ресурс == "судьба":
+            if resource == "fate":
                 # Второе применение Судьбы: в безнадёжном положении игрок
                 # тратит её и называет значение на кубах сам. Спасение от
                 # смерти по-прежнему идёт отдельным запросом скрипта, здесь
                 # только выбор числа.
-                значение = parse.выбранное_значение(текст)
-                self.заявки_судьбы[имя] = значение
+                value = parse.chosen_value(text)
+                self.claims_fate[name] = value
                 # Названное число — не самоброс: игрок имел право его назвать,
                 # и записывать это в жульничество было бы клеветой.
-                self.выданные_числа.add(значение)
-                self._записать_ресурс({**основа, "подтверждено": False,
-                                       "ожидание": True, "выбрано": значение,
-                                       "причина": f"заявка принята: возьмёт {значение} "
+                self.issued_numbers.add(value)
+                self._write_resource({**stem, "подтверждено": False,
+                                       "ожидание": True, "выбрано": value,
+                                       "reason": f"заявка принята: возьмёт {value} "
                                                   "на первой же своей проверке круга"})
-                метки.append("заявка_судьбы")
+                tags.append("заявка_судьбы")
                 continue
 
-            if ресурс == "стойкость":
-                итог = self.боевка.потратить_стойкость(имя)
-            elif ресурс == "удача":
+            if resource == "resilience":
+                total = self.combat.spend_resilience(name)
+            elif resource == "fortune":
                 # Игроки ходят раньше проверок, поэтому Удача копится заявкой
                 # и срабатывает на первом же провале этого круга.
-                self.заявки_удачи[имя] = "переброс"
-                self._записать_ресурс({**основа, "подтверждено": False,
+                self.claims_fortune[name] = "переброс"
+                self._write_resource({**stem, "подтверждено": False,
                                        "ожидание": True,
-                                       "причина": "заявка принята, сработает на "
+                                       "reason": "заявка принята, сработает на "
                                                   "первом проваленном броске круга"})
-                метки.append("заявка_удачи")
+                tags.append("заявка_удачи")
                 continue
             else:
-                итог = self.боевка.потратить(имя, ресурс)
+                total = self.combat.spend(name, resource)
 
-            if итог["успех"] and ресурс == "решимость":
+            if total["success"] and resource == "resolve":
                 # Решимость снимает на круг ВСЁ: страх, боль, раны, штрафы.
                 # Раньше она умела только убирать «сломлен» и «оглушён», и в
                 # третьем прогоне Курт потратил её впустую — снимать было
                 # нечего. Теперь трата не пропадает никогда.
-                итог["иммунитет"] = self.боевка.дать_иммунитет(имя)
-                self.доставить(
-                    МАСТЕР,
-                    f"СЛУЖЕБНОЕ. {имя} потратил Решимость: этот круг его не "
+                total["immunity"] = self.combat.give_immunity(name)
+                self.deliver(
+                    GM,
+                    f"СЛУЖЕБНОЕ. {name} потратил Решимость: этот круг его не "
                     f"держит ничего — ни страх, ни боль, ни раны, ни штрафы. "
                     f"Что именно это оправдывает в сцене, решаешь ты: если "
                     f"счёл уместным — значит можно.",
                     "скрипт",
                 )
-            self._записать_ресурс({**основа, "подтверждено": итог["успех"],
-                                   "причина": итог["причина"],
-                                   "было": итог["было"], "стало": итог["стало"],
-                                   "иммунитет_на_круг": итог.get("иммунитет") is not None,
-                                   "состояния_при_трате": итог.get("иммунитет") or None})
-            метки.append("ресурс_потрачен" if итог["успех"] else "заявка_отклонена")
-            if not итог["успех"]:
-                self.доставить(
-                    МАСТЕР,
-                    f"СЛУЖЕБНОЕ. {имя} объявил трату — {ресурс}, — но тратить "
-                    f"нечего: {итог['причина']}. Эффекта нет.",
+            self._write_resource({**stem, "подтверждено": total["success"],
+                                   "reason": total["reason"],
+                                   "before": total["before"], "after": total["after"],
+                                   "immunity_for_round": total.get("immunity") is not None,
+                                   "состояния_при_трате": total.get("immunity") or None})
+            tags.append("ресурс_потрачен" if total["success"] else "заявка_отклонена")
+            if not total["success"]:
+                self.deliver(
+                    GM,
+                    f"СЛУЖЕБНОЕ. {name} объявил трату — "
+                    f"{protocol.RESOURCE_NAMES.get(resource, resource)}, — но тратить "
+                    f"нечего: {total['reason']}. Эффекта нет.",
                     "скрипт",
                 )
-        return метки
+        return tags
 
-    def _шапка_круга(self) -> str:
+    def _header_round(self) -> str:
         """Мастер должен видеть, сколько осталось: без счётчика он не торопится."""
-        предел = int(self.конфиг["предел_кругов"])
-        шапка = f"Круг {self.круг} из {предел}. Режим: {self.режим}."
-        if self.выбывшие:
-            выбыли = ", ".join(
-                f"{имя} ({данные['причина']}, с круга {данные['круг']})"
-                for имя, данные in self.выбывшие.items()
+        limit = int(self.config["max_rounds"])
+        header = f"Круг {self.round} из {limit}. Режим: {self.mode}."
+        if self.down:
+            down_names = ", ".join(
+                f"{name} ({data['reason']}, с круга {data['round']})"
+                for name, data in self.down.items()
             )
-            шапка += f" Выбыли: {выбыли}."
-        return шапка
+            header += f" Выбыли: {down_names}."
+        return header
 
-    def _свод_ходов(self, ходы: list[Ход], шапка: str) -> str:
-        явные = [х for х in ходы if not х.тайно and not х.отказ]
+    def _summary_turns(self, turns: list[Turn], header: str) -> str:
+        explicit = [t for t in turns if not t.secret and not t.refusal]
         # Про отказ мастеру говорим как про молчание, без причины: знать, что за
         # персонажем чужая модель и она отказалась, ему не положено.
-        промолчали = [х.персонаж for х in ходы if х.отказ]
-        строки = [шапка, "", "Ходы игроков:", ""]
-        for ход in явные:
-            строки.append(f"{ход.персонаж.upper()}: {ход.текст}")
-            строки.append("")
-        if not явные and not промолчали:
-            строки.append("(все ходы этого круга были тайными)")
-        for имя in промолчали:
-            строки.append(f"{имя.upper()}: молчит и ничего не делает в этот круг.")
-            строки.append("")
-        return "\n".join(строки).strip()
+        silent = [t.character for t in turns if t.refusal]
+        lines = [header, "", "Ходы игроков:", ""]
+        for turn in explicit:
+            lines.append(f"{turn.character.upper()}: {turn.text}")
+            lines.append("")
+        if not explicit and not silent:
+            lines.append("(все ходы этого круга были тайными)")
+        for name in silent:
+            lines.append(f"{name.upper()}: молчит и ничего не делает в этот круг.")
+            lines.append("")
+        return "\n".join(lines).strip()
 
     # --- сцена мастера ----------------------------------------------------
 
-    async def _сцена_мастера(self, вводная: bool = False) -> None:
-        подсказка = (
+    async def _scene_gm(self, briefing: bool = False) -> None:
+        hint = (
             "Вводная сцена. Восемь-двенадцать предложений."
-            if вводная else "Твоя сцена."
+            if briefing else "Твоя сцена."
         )
-        куски: list[str] = []
-        аннотации: dict[str, str] = {}
-        аннотации_атак: dict[str, str] = {}
-        предел = int(self.конфиг.get("предел_ответов_мастера_за_круг", 8))
+        chunks: list[str] = []
+        annotations: dict[str, str] = {}
+        annotations_attacks: dict[str, str] = {}
+        limit = int(self.config.get("max_gm_replies_per_round", 8))
         # Сцена мастера может состоять из нескольких ответов: он останавливается
         # на проверке и продолжает после броска. Расход суммируем по всем.
-        расход = {"стоимость": 0.0, "латентность_мс": 0, "токены": {}, "модель": None,
-                  "контекст": 0}
+        usage = {"cost": 0.0, "latency_ms": 0, "tokens": {}, "model": None,
+                  "context": 0}
 
-        for шаг in range(1, предел + 1):
-            ответ = await self.спросить(МАСТЕР, подсказка)
-            подсказка = "Продолжай сцену."
-            текст = ответ.текст.strip()
+        for step in range(1, limit + 1):
+            reply = await self.ask(GM, hint)
+            hint = "Продолжай сцену."
+            text = reply.text.strip()
 
             # Мастер тоже может отказаться вести сцену. Его отказ за стол не
             # уходит — иначе нравоучение попадёт в реплику и увидят все игроки.
             # Круг остаётся без сцены мастера, и это громко видно в логе.
-            if "отказ" in ответ.метки:
-                self.отказы.append({
-                    "круг": self.круг, "кто": МАСТЕР, "провайдер": ответ.провайдер,
-                    "модель": ответ.модель_факт or ответ.модель,
-                    "цитата": " ".join(текст.split())[:300],
+            if "отказ" in reply.tags:
+                self.refusals.append({
+                    "round": self.round, "who": GM, "provider": reply.provider,
+                    "model": reply.model_actual or reply.model,
+                    "quote": " ".join(text.split())[:300],
                 })
-                self.журнал.аномалия(
-                    круг=self.круг, кто=МАСТЕР, метка="отказ",
-                    подробности=" ".join(текст.split())[:300],
+                self.logbook.anomaly(
+                    round=self.round, who=GM, tag="отказ",
+                    details=" ".join(text.split())[:300],
                 )
                 break
 
-            куски.append(текст)
+            chunks.append(text)
 
-            расход["стоимость"] += ответ.стоимость or 0.0
-            расход["латентность_мс"] += ответ.латентность_мс
-            расход["контекст"] = max(расход["контекст"], self._контекст.get(МАСТЕР, 0))
-            расход["модель"] = ответ.модель_факт or ответ.модель
-            for ключ, значение in (ответ.токены or {}).items():
-                if isinstance(значение, int):
-                    расход["токены"][ключ] = расход["токены"].get(ключ, 0) + значение
+            usage["cost"] += reply.cost or 0.0
+            usage["latency_ms"] += reply.latency_ms
+            usage["context"] = max(usage["context"], self._context.get(GM, 0))
+            usage["model"] = reply.model_actual or reply.model
+            for key, value in (reply.tokens or {}).items():
+                if isinstance(value, int):
+                    usage["tokens"][key] = usage["tokens"].get(key, 0) + value
 
-            замечания: list[str] = []
-            фрагменты = parse.самоброски(текст, self.выданные_числа)
-            if фрагменты:
-                настоящий = self.кубики.подставной()
-                self.выданные_числа.add(настоящий)
-                self.счётчики[МАСТЕР]["самобросков"] += 1
-                self.журнал.аномалия(круг=self.круг, кто=МАСТЕР, метка="самоброс",
-                                     подробности="; ".join(фрагменты))
-                замечания.append(
+            notes: list[str] = []
+            fragments = parse.self_rolls(text, self.issued_numbers)
+            if fragments:
+                real = self.dice.fake()
+                self.issued_numbers.add(real)
+                self.counters[GM]["self_rolls"] += 1
+                self.logbook.anomaly(round=self.round, who=GM, tag="самоброс",
+                                     details="; ".join(fragments))
+                notes.append(
                     "Бросок недействителен, его не называют сами. "
-                    f"Настоящий результат: {настоящий}."
+                    f"Настоящий результат: {real}."
                 )
 
-            проверки, аномалии = parse.проверки(текст, self.имена)
-            боевые, аномалии_боя = parse.атаки(текст, self.имена)
-            for метка in [м for м in аномалии + аномалии_боя if м != "проверка_за_нпс"]:
-                self.журнал.аномалия(круг=self.круг, кто=МАСТЕР, метка=метка,
-                                     подробности=текст[:400])
+            checks, anomalies = parse.checks(text, self.names)
+            attack_lines, anomalies_combat = parse.attacks(text, self.names)
+            for tag in [mk for mk in anomalies + anomalies_combat if mk != "проверка_за_нпс"]:
+                self.logbook.anomaly(round=self.round, who=GM, tag=tag,
+                                     details=text[:400])
 
-            строки: list[str] = []
-            for проверка in проверки:
-                бросок = self.кубики.бросить(
-                    проверка.персонаж, проверка.навык, проверка.сложность, проверка.база
+            lines: list[str] = []
+            for check in checks:
+                roll = self.dice.roll(
+                    check.character, check.skill, check.difficulty, check.base
                 )
-                self.журнал.бросок(круг=self.круг, бросок=бросок.как_словарь(),
-                                   метки=проверка.метки + бросок.метки)
-                self.выданные_числа.update({бросок.выпало, бросок.цель})
-                if проверка.персонаж in self.провалы_игроков and not бросок.успех:
-                    self.провалы_игроков[проверка.персонаж] += 1
+                self.logbook.roll(round=self.round, roll=roll.as_dict(),
+                                   tags=check.tags + roll.tags)
+                self.issued_numbers.update({roll.rolled, roll.target})
+                if check.character in self.player_failures and not roll.success:
+                    self.player_failures[check.character] += 1
                 # Судьба сильнее Удачи: если заявлены обе, число берётся
                 # выбранное, и перебрасывать уже нечего.
-                бросок, подменён = self._выбор_за_судьбу(проверка, бросок)
-                if not подменён:
-                    бросок = self._переброс_за_удачу(проверка, бросок)
-                аннотации[проверка.строка] = бросок.кратко()
-                строки.append(бросок.строкой())
+                roll, substituted = self._choice_for_fate(check, roll)
+                if not substituted:
+                    roll = self._reroll_for_fortune(check, roll)
+                annotations[check.line] = roll.short()
+                lines.append(roll.as_line())
 
-            строки_боя = self._провести_атаки(боевые, аннотации_атак)
+            lines_combat = self._resolve_attacks(attack_lines, annotations_attacks)
 
-            if замечания:
-                self.доставить(МАСТЕР, "\n".join(замечания), "скрипт")
-            if строки:
-                self.доставить(МАСТЕР, "Результаты бросков:\n" + "\n".join(строки), "скрипт")
-            if строки_боя:
-                self.доставить(МАСТЕР, "Результаты атак:\n" + "\n".join(строки_боя),
+            if notes:
+                self.deliver(GM, "\n".join(notes), "скрипт")
+            if lines:
+                self.deliver(GM, "Результаты бросков:\n" + "\n".join(lines), "скрипт")
+            if lines_combat:
+                self.deliver(GM, "Результаты атак:\n" + "\n".join(lines_combat),
                                "скрипт")
-            if not строки and not замечания and not строки_боя:
+            if not lines and not notes and not lines_combat:
                 break
-            if шаг == предел:
-                self.журнал.аномалия(круг=self.круг, кто=МАСТЕР,
-                                     метка="предел_ответов_мастера", подробности="")
+            if step == limit:
+                self.logbook.anomaly(round=self.round, who=GM,
+                                     tag="предел_ответов_мастера", details="")
 
-        полный = "\n\n".join(к for к in куски if к)
-        self.счётчики[МАСТЕР]["ходов"] += 1
-        self.счётчики[МАСТЕР]["символов"] += len(полный)
+        full = "\n\n".join(d for d in chunks if d)
+        self.counters[GM]["turns"] += 1
+        self.counters[GM]["chars"] += len(full)
 
-        режим, был_тег = parse.режим(полный, self.конфиг.get("режим_по_умолчанию", protocol.DEFAULT_MODE))
+        mode, had_tag = parse.mode(full, self.config.get("default_mode", protocol.DEFAULT_MODE))
         # На финальной сцене тег режима уже не нужен, аномалией это не считаем.
-        не_тег = not был_тег and not parse.объявлен_финал(полный)
-        if не_тег:
-            self.журнал.аномалия(круг=self.круг, кто=МАСТЕР, метка="тег_режима_пропущен",
-                                 подробности="")
-        self.режим = режим
+        not_tag = not had_tag and not parse.declared_finale(full)
+        if not_tag:
+            self.logbook.anomaly(round=self.round, who=GM, tag="тег_режима_пропущен",
+                                 details="")
+        self.mode = mode
 
-        публично, личное = parse.разделить_личное(полный)
-        публично = parse.подписать_проверки(parse.без_служебных_тегов(публично), аннотации)
-        публично = parse.подписать_атаки(публично, аннотации_атак)
-        для_игроков = parse.без_строк_атак(публично)
+        public, private = parse.split_private(full)
+        public = parse.annotate_checks(parse.without_control_tags(public), annotations)
+        public = parse.annotate_attacks(public, annotations_attacks)
+        for_players = parse.without_lines_attacks(public)
 
-        self.журнал.ход(
-            круг=self.круг, режим=self.режим, говорящий=МАСТЕР, порядок_в_круге=0,
-            видимость="всем", текст=публично,
-            метки=(["тег_режима_пропущен"] if не_тег else []) + (["вводная"] if вводная else []),
-            провайдер=self.конфиг["мастер"]["провайдер"],
-            модель=расход["модель"] or self.конфиг["мастер"]["модель"],
-            латентность_мс=расход["латентность_мс"] or None,
-            токены=расход["токены"] or None,
-            стоимость=round(расход["стоимость"], 6) or None,
-            ответов_в_сцене=len(куски),
-            контекст_символов=расход["контекст"] or None,
+        self.logbook.turn(
+            round=self.round, mode=self.mode, speaker=GM, order_in_round=0,
+            visibility="всем", text=public,
+            tags=(["тег_режима_пропущен"] if not_tag else []) + (["вводная"] if briefing else []),
+            provider=self.config["gm"]["provider"],
+            model=usage["model"] or self.config["gm"]["model"],
+            latency_ms=usage["latency_ms"] or None,
+            tokens=usage["tokens"] or None,
+            cost=round(usage["cost"], 6) or None,
+            replies_v_scene=len(chunks),
+            context_chars=usage["context"] or None,
         )
-        for имя in self.имена:
-            self.доставить(имя, f"МАСТЕР:\n{для_игроков}", МАСТЕР)
+        for name in self.names:
+            self.deliver(name, f"МАСТЕР:\n{for_players}", GM)
 
-        for кому, кусок in личное.items():
-            кусок = parse.без_служебных_тегов(кусок)
-            цель = self._опознать(кому)
-            if цель is None:
-                self.журнал.аномалия(круг=self.круг, кто=МАСТЕР, метка="личный_блок_без_адресата",
-                                     подробности=кому)
+        for to, chunk in private.items():
+            chunk = parse.without_control_tags(chunk)
+            target = self._identify(to)
+            if target is None:
+                self.logbook.anomaly(round=self.round, who=GM, tag="личный_блок_без_адресата",
+                                     details=to)
                 continue
-            self.журнал.ход(
-                круг=self.круг, режим=self.режим, говорящий=МАСТЕР, порядок_в_круге=0,
-                видимость=f"только {цель}", текст=кусок, метки=["личный_блок"],
+            self.logbook.turn(
+                round=self.round, mode=self.mode, speaker=GM, order_in_round=0,
+                visibility=f"только {target}", text=chunk, tags=["личный_блок"],
             )
-            self.доставить(цель, f"ТОЛЬКО ДЛЯ ТЕБЯ:\n{кусок}", МАСТЕР)
+            self.deliver(target, f"ТОЛЬКО ДЛЯ ТЕБЯ:\n{chunk}", GM)
 
-        self._разобрать_решимость(полный)
-        self._разобрать_выбытия(полный)
+        self._parse_resolve(full)
+        self._parse_down(full)
         # Заявки на Удачу живут один круг: не сработала — сгорела вместе с ним.
-        self.заявки_удачи.clear()
-        self.заявки_судьбы.clear()
+        self.claims_fortune.clear()
+        self.claims_fate.clear()
 
-        if parse.объявлен_финал(полный):
-            self.остановка = "финал"
-            self.журнал.записать("финал", круг=self.круг, говорящий=МАСТЕР)
-        elif not self.активные:
-            self.остановка = "все игроки выбыли"
-            self.журнал.записать("остановка", круг=self.круг,
-                                 текст="все игроки выбыли")
+        if parse.declared_finale(full):
+            self.stop = "финал"
+            self.logbook.write("финал", round=self.round, speaker=GM)
+        elif not self.active:
+            self.stop = "все игроки выбыли"
+            self.logbook.write("остановка", round=self.round,
+                                 text="все игроки выбыли")
 
-    def _выбор_за_судьбу(self, проверка, бросок):
+    def _choice_for_fate(self, check, roll):
         """Судьба в безнадёжном положении: игрок берёт число сам.
 
         Возвращает бросок и признак того, что подмена случилась. Настоящий
         бросок уже записан в лог выше — сравнение «выпало бы столько, взял
         столько» показывает, чего стоила трата, и пойдёт в разбор.
         """
-        имя = проверка.персонаж
-        значение = self.заявки_судьбы.get(имя)
-        if значение is None or not self.боевка or имя not in self.боевка.бойцы:
-            return бросок, False
+        name = check.character
+        value = self.claims_fate.get(name)
+        if value is None or not self.combat or name not in self.combat.combatants:
+            return roll, False
 
-        self.заявки_судьбы.pop(имя, None)
-        итог = self.боевка.потратить_судьбу(имя)
-        if not итог["успех"]:
-            self._записать_ресурс({
-                "круг": self.круг, "кто": имя, "ресурс": "судьба", "вид": "трата",
-                "заявлено": True, "подтверждено": False, "причина": итог["причина"],
-                "было": итог["было"], "стало": итог["стало"],
+        self.claims_fate.pop(name, None)
+        total = self.combat.spend_fate(name)
+        if not total["success"]:
+            self._write_resource({
+                "round": self.round, "who": name, "resource": "fate", "variant": "трата",
+                "заявлено": True, "подтверждено": False, "reason": total["reason"],
+                "before": total["before"], "after": total["after"],
             })
-            return бросок, False
+            return roll, False
 
-        новый = self.кубики.подменить(бросок, значение, "выбрано_за_судьбу")
-        self.журнал.бросок(круг=self.круг, бросок=новый.как_словарь(),
-                           метки=проверка.метки + новый.метки)
-        self.выданные_числа.update({новый.выпало, новый.цель})
-        self._записать_ресурс({
-            "круг": self.круг, "кто": имя, "ресурс": "судьба", "вид": "трата",
-            "на_что": "выбор значения", "заявлено": True, "подтверждено": True,
-            "причина": "", "было": итог["было"], "стало": итог["стало"],
-            "бросок_до": {"выпало": бросок.выпало, "цель": бросок.цель,
-                          "успех": бросок.успех},
-            "бросок_после": {"выпало": новый.выпало, "цель": новый.цель,
-                             "успех": новый.успех},
-            "помогло": bool(новый.успех and not бросок.успех),
+        fresh = self.dice.substitute(roll, value, "выбрано_за_судьбу")
+        self.logbook.roll(round=self.round, roll=fresh.as_dict(),
+                           tags=check.tags + fresh.tags)
+        self.issued_numbers.update({fresh.rolled, fresh.target})
+        self._write_resource({
+            "round": self.round, "who": name, "resource": "fate", "variant": "трата",
+            "on_what": "выбор значения", "заявлено": True, "подтверждено": True,
+            "reason": "", "before": total["before"], "after": total["after"],
+            "roll_before": {"rolled": roll.rolled, "target": roll.target,
+                          "success": roll.success},
+            "roll_after": {"rolled": fresh.rolled, "target": fresh.target,
+                             "success": fresh.success},
+            "помогло": bool(fresh.success and not roll.success),
         })
-        self.доставить(
-            МАСТЕР,
-            f"СЛУЖЕБНОЕ. {имя} потратил Судьбу и взял {новый.выпало} вместо "
-            f"выпавшего {бросок.выпало}. Судьбы осталось "
-            f"{итог['стало']['судьба']}, потолок Удачи теперь "
-            f"{итог['стало']['удача_макс']}. Опиши, ЧЕМ это далось: Судьба "
+        self.deliver(
+            GM,
+            f"СЛУЖЕБНОЕ. {name} потратил Судьбу и взял {fresh.rolled} вместо "
+            f"выпавшего {roll.rolled}. Судьбы осталось "
+            f"{total['after']['fate']}, потолок Удачи теперь "
+            f"{total['after']['fortune_max']}. Опиши, ЧЕМ это далось: Судьба "
             f"тратится навсегда и должна оставить след — не «повезло», "
             f"а какой ценой.",
             "скрипт",
         )
-        return новый, True
+        return fresh, True
 
-    def _переброс_за_удачу(self, проверка, бросок):
+    def _reroll_for_fortune(self, check, roll):
         """Заявленная Удача срабатывает на первом же проваленном броске круга.
 
         Оба результата остаются в логе: сравнение «было — стало» показывает,
         что трата действительно что-то изменила, и пойдёт в ролик.
         """
-        имя = проверка.персонаж
-        if бросок.успех or self.заявки_удачи.get(имя) != "переброс":
-            return бросок
-        if not self.боевка or имя not in self.боевка.бойцы:
-            return бросок
+        name = check.character
+        if roll.success or self.claims_fortune.get(name) != "переброс":
+            return roll
+        if not self.combat or name not in self.combat.combatants:
+            return roll
 
-        итог = self.боевка.потратить(имя, "удача")
-        self.заявки_удачи.pop(имя, None)
-        if not итог["успех"]:
-            self._записать_ресурс({
-                "круг": self.круг, "кто": имя, "ресурс": "удача",
+        total = self.combat.spend(name, "fortune")
+        self.claims_fortune.pop(name, None)
+        if not total["success"]:
+            self._write_resource({
+                "round": self.round, "who": name, "resource": "fortune",
                 "заявлено": True, "подтверждено": False,
-                "причина": итог["причина"], "было": итог["было"],
-                "стало": итог["стало"],
+                "reason": total["reason"], "before": total["before"],
+                "after": total["after"],
             })
-            return бросок
+            return roll
 
-        новый = self.кубики.бросить(проверка.персонаж, проверка.навык,
-                                    проверка.сложность, проверка.база)
-        self.журнал.бросок(круг=self.круг, бросок=новый.как_словарь(),
-                           метки=проверка.метки + новый.метки + ["переброс_за_удачу"])
-        self.выданные_числа.update({новый.выпало, новый.цель})
-        self._записать_ресурс({
-            "круг": self.круг, "кто": имя, "ресурс": "удача", "на_что": "переброс",
-            "заявлено": True, "подтверждено": True, "причина": "",
-            "было": итог["было"], "стало": итог["стало"],
-            "бросок_до": {"выпало": бросок.выпало, "цель": бросок.цель,
-                          "успех": бросок.успех},
-            "бросок_после": {"выпало": новый.выпало, "цель": новый.цель,
-                             "успех": новый.успех},
-            "помогло": bool(новый.успех),
+        fresh = self.dice.roll(check.character, check.skill,
+                                    check.difficulty, check.base)
+        self.logbook.roll(round=self.round, roll=fresh.as_dict(),
+                           tags=check.tags + fresh.tags + ["переброс_за_удачу"])
+        self.issued_numbers.update({fresh.rolled, fresh.target})
+        self._write_resource({
+            "round": self.round, "who": name, "resource": "fortune", "on_what": "переброс",
+            "заявлено": True, "подтверждено": True, "reason": "",
+            "before": total["before"], "after": total["after"],
+            "roll_before": {"rolled": roll.rolled, "target": roll.target,
+                          "success": roll.success},
+            "roll_after": {"rolled": fresh.rolled, "target": fresh.target,
+                             "success": fresh.success},
+            "помогло": bool(fresh.success),
         })
-        self.доставить(
-            МАСТЕР,
-            f"СЛУЖЕБНОЕ. {имя} потратил Удачу на переброс: было {бросок.выпало} "
-            f"из {бросок.цель} (провал), стало {новый.выпало} из {новый.цель} "
-            f"({'успех' if новый.успех else 'снова провал'}). Опиши это как "
+        self.deliver(
+            GM,
+            f"СЛУЖЕБНОЕ. {name} потратил Удачу на переброс: было {roll.rolled} "
+            f"из {roll.target} (провал), стало {fresh.rolled} из {fresh.target} "
+            f"({'успех' if fresh.success else 'снова провал'}). Опиши это как "
             f"случайность или всплеск сил, не называя механики.",
             "скрипт",
         )
-        return новый
+        return fresh
 
-    def _разобрать_решимость(self, текст: str) -> None:
+    def _parse_resolve(self, text: str) -> None:
         """Мастер начисляет Решимость за игру по Мотивации. Только он."""
-        if not self.боевка:
+        if not self.combat:
             return
-        for запись in parse.начисления_решимости(текст, self.имена):
-            имя = запись["имя"]
-            if имя not in self.имена or имя not in self.боевка.бойцы:
-                self.журнал.аномалия(круг=self.круг, кто=МАСТЕР,
-                                     метка="решимость_неизвестному",
-                                     подробности=запись["строка"])
+        for entry in parse.awards_resolve(text, self.names):
+            name = entry["name"]
+            if name not in self.names or name not in self.combat.combatants:
+                self.logbook.anomaly(round=self.round, who=GM,
+                                     tag="решимость_неизвестному",
+                                     details=entry["line"])
                 continue
-            итог = self.боевка.начислить_решимость(имя, запись["сколько"])
-            self._записать_ресурс({
-                "круг": self.круг, "кто": имя, "ресурс": "решимость",
-                "вид": "начисление", "начислено": итог["добавлено"],
-                "заявлено": True, "подтверждено": итог["успех"],
-                "причина": запись["причина"], "отказ": итог["причина"],
-                "было": итог["было"], "стало": итог["стало"],
+            total = self.combat.award_resolve(name, entry["amount"])
+            self._write_resource({
+                "round": self.round, "who": name, "resource": "resolve",
+                "variant": "начисление", "начислено": total["added"],
+                "заявлено": True, "подтверждено": total["success"],
+                "reason": entry["reason"], "refusal": total["reason"],
+                "before": total["before"], "after": total["after"],
             })
-            if итог["успех"]:
-                self.доставить(
-                    имя,
-                    f"СЛУЖЕБНОЕ. Тебе начислена Решимость (+{итог['добавлено']}) "
-                    f"за игру по своей цели: {запись['причина']}. "
-                    f"Теперь у тебя Решимости {итог['стало']['решимость']} из "
-                    f"{итог['стало']['решимость_макс']}.",
+            if total["success"]:
+                self.deliver(
+                    name,
+                    f"СЛУЖЕБНОЕ. Тебе начислена Решимость (+{total['added']}) "
+                    f"за игру по своей цели: {entry['reason']}. "
+                    f"Теперь у тебя Решимости {total['after']['resolve']} из "
+                    f"{total['after']['resolve_max']}.",
                     "скрипт",
                 )
 
-    def _разобрать_выбытия(self, текст: str) -> None:
+    def _parse_down(self, text: str) -> None:
         """Теги [ВЫБЫЛ] и [ВЕРНУЛСЯ]. Выбывшего больше не спрашивают."""
-        for имя, причина in parse.выбытия(текст, self.имена):
-            if имя not in self.имена:
-                self.журнал.аномалия(круг=self.круг, кто=МАСТЕР,
-                                     метка="выбытие_неизвестного", подробности=имя)
+        for name, reason in parse.down_events(text, self.names):
+            if name not in self.names:
+                self.logbook.anomaly(round=self.round, who=GM,
+                                     tag="выбытие_неизвестного", details=name)
                 continue
-            if имя in self.выбывшие:
+            if name in self.down:
                 continue
-            self.выбывшие[имя] = {"причина": причина, "круг": self.круг}
-            self.очередь[имя] = []   # недоставленное выбывшему пропадает
-            self.журнал.записать(
-                "выбытие", круг=self.круг, говорящий=имя, текст=причина,
-                отыграно_кругов=self.отыграно.get(имя, 0),
+            self.down[name] = {"reason": reason, "round": self.round}
+            self.queue[name] = []   # недоставленное выбывшему пропадает
+            self.logbook.write(
+                "выбытие", round=self.round, speaker=name, text=reason,
+                rounds_played=self.played.get(name, 0),
             )
 
-        for имя in parse.возвращения(текст, self.имена):
-            if имя in self.выбывшие:
-                данные = self.выбывшие.pop(имя)
-                self.журнал.записать(
-                    "возвращение", круг=self.круг, говорящий=имя,
-                    текст=f"отсутствовал с круга {данные['круг']} ({данные['причина']})",
+        for name in parse.comebacks(text, self.names):
+            if name in self.down:
+                data = self.down.pop(name)
+                self.logbook.write(
+                    "возвращение", round=self.round, speaker=name,
+                    text=f"отсутствовал с круга {data['round']} ({data['reason']})",
                 )
 
     # --- бой ---------------------------------------------------------------
 
-    def _провести_атаки(self, боевые, аннотации: dict) -> list[str]:
+    def _resolve_attacks(self, attack_lines, annotations: dict) -> list[str]:
         """Считает скрипт: встречная проверка, локация, броня, раны, криты."""
-        if not self.боевка or not боевые:
+        if not self.combat or not attack_lines:
             return []
 
-        строки: list[str] = []
-        for атака in боевые:
-            итог = self.боевка.атака(атака.кто, атака.по_кому, атака.чем, атака.защита)
-            self.журнал.записать(
-                "атака", круг=self.круг, говорящий=атака.кто, видимость="всем",
-                атака=итог.словарь(), метки=итог.метки + атака.метки,
+        lines: list[str] = []
+        for attack in attack_lines:
+            total = self.combat.attack(attack.who, attack.by_to, attack.weapon, attack.defence)
+            self.logbook.write(
+                "атака", round=self.round, speaker=attack.who, visibility="всем",
+                attack=total.mapping(), tags=total.tags + attack.tags,
             )
-            self.выданные_числа.update(
-                {итог.бросок_атаки, итог.бросок_защиты, итог.цель_атаки,
-                 итог.цель_защиты, итог.ран_снято, итог.ран_осталось}
+            self.issued_numbers.update(
+                {total.roll_attacks, total.roll_defence, total.target_attacks,
+                 total.target_defence, total.wounds_dealt, total.wounds_left}
             )
-            аннотации[атака.строка] = итог.строкой()
-            строки.append(итог.строкой())
+            annotations[attack.line] = total.as_line()
+            lines.append(total.as_line())
 
-            if итог.дубль:
-                если = {
-                    "дубль_крит": "критическое ранение, опиши как это выглядит",
+            if total.doubles:
+                when = {
+                    "doubles_crit": "критическое ранение, опиши как это выглядит",
                     "фумбл": "фумбл, опиши осложнение",
                     "дубль_без_последствий":
                         "дубль, но атака не прошла — последствий нет",
                 }
-                пометка = next((т for м, т in если.items() if м in итог.метки), "")
-                if пометка:
-                    строки.append(f"  дубль {итог.бросок_атаки}: {пометка}")
-            if итог.ждёт_судьбу:
-                self.ожидают_судьбу.append(итог.цель)
-            elif итог.смерть:
-                строки.append(self.боевка.применить_судьбу(итог.цель, False))
-        return строки
+                mark = next((tx for mk, tx in when.items() if mk in total.tags), "")
+                if mark:
+                    lines.append(f"  дубль {total.roll_attacks}: {mark}")
+            if total.awaiting_fate:
+                self.fate_queue.append(total.target)
+            elif total.death:
+                lines.append(self.combat.apply_fate(total.target, False))
+        return lines
 
-    async def _спросить_судьбу(self) -> list[str]:
+    async def _ask_fate(self) -> list[str]:
         """Судьбу тратит игрок и только своим словом. Ни скрипт, ни мастер."""
-        ответы: list[str] = []
-        while self.ожидают_судьбу:
-            имя = self.ожидают_судьбу.pop(0)
-            if имя not in self.имена:
-                ответы.append(self.боевка.применить_судьбу(имя, False))
+        replies: list[str] = []
+        while self.fate_queue:
+            name = self.fate_queue.pop(0)
+            if name not in self.names:
+                replies.append(self.combat.apply_fate(name, False))
                 continue
 
-            лист = self.боевка.лист(имя)
-            self.доставить(
-                имя,
+            sheet = self.combat.sheet(name)
+            self.deliver(
+                name,
                 "СЛУЖЕБНОЕ. Твой персонаж получил смертельное ранение. Судьба "
-                f"заменит смерть на беспамятство, у тебя её осталось {лист.судьба}. "
+                f"заменит смерть на беспамятство, у тебя её осталось {sheet.fate}. "
                 "Тратишь? Ответь первым словом ДА или НЕТ, дальше можешь коротко "
                 "отыграть.",
                 "скрипт",
             )
             try:
-                ответ = await self.спросить(имя, "Тратишь Судьбу?")
-                тратит = bool(re.match(r"\s*\W*да\b", ответ.текст, re.IGNORECASE))
-                текст_ответа = ответ.текст.strip()
-            except ОстановкаПрогона:
+                reply = await self.ask(name, "Тратишь Судьбу?")
+                spending = bool(re.match(r"\s*\W*да\b", reply.text, re.IGNORECASE))
+                text_reply = reply.text.strip()
+            except RunStopped:
                 # Агент не ответил — Судьбу за него не тратим, это его решение.
-                тратит, текст_ответа = False, "(агент не ответил)"
+                spending, text_reply = False, "(агент не ответил)"
 
-            итог = self.боевка.применить_судьбу(имя, тратит)
-            self.журнал.записать(
-                "судьба", круг=self.круг, говорящий=имя, текст=текст_ответа,
-                потрачена=тратит, осталось=self.боевка.лист(имя).судьба,
+            total = self.combat.apply_fate(name, spending)
+            self.logbook.write(
+                "судьба", round=self.round, speaker=name, text=text_reply,
+                spent=spending, left=self.combat.sheet(name).fate,
             )
-            ответы.append(итог)
-            if not тратит:
-                self.выбывшие.setdefault(имя, {"причина": "погиб", "круг": self.круг})
-        return ответы
+            replies.append(total)
+            if not spending:
+                self.down.setdefault(name, {"reason": "погиб", "round": self.round})
+        return replies
 
-    async def _кровотечение(self) -> list[str]:
+    async def _bleeding(self) -> list[str]:
         """На нуле ран истекающий кровью проверяется каждый раунд. Сам, без мастера."""
-        строки: list[str] = []
-        for имя in self.боевка.кровоточащие():
-            итог = self.боевка.проверка_кровотечения(имя)
-            self.журнал.записать(
-                "кровотечение", круг=self.круг, говорящий=имя,
-                бросок=итог, метки=["без_сознания"] if not итог["успех"] else [],
+        lines: list[str] = []
+        for name in self.combat.bleeding():
+            total = self.combat.check_bleeding(name)
+            self.logbook.write(
+                "кровотечение", round=self.round, speaker=name,
+                roll=total, tags=["без_сознания"] if not total["success"] else [],
             )
-            self.выданные_числа.update({итог["выпало"], итог["цель"]})
-            строки.append(
-                f"{имя}: кровотечение, Выносливость — выпало {итог['выпало']} "
-                f"из {итог['цель']}, {итог['последствие']}"
+            self.issued_numbers.update({total["rolled"], total["target"]})
+            lines.append(
+                f"{name}: кровотечение, Выносливость — выпало {total['rolled']} "
+                f"из {total['target']}, {total['последствие']}"
             )
-        return строки
+        return lines
 
-    def _опознать(self, сырое: str) -> str | None:
-        ключ = сырое.strip().lower()
-        for имя in self.имена:
-            if ключ.startswith(имя.lower()[:4]):
-                return имя
+    def _identify(self, raw: str) -> str | None:
+        key = raw.strip().lower()
+        for name in self.names:
+            if key.startswith(name.lower()[:4]):
+                return name
         return None
 
     # --- итоги ------------------------------------------------------------
 
-    def _свести_провайдеров(self) -> dict:
+    def _collate_providers(self) -> dict:
         """Сводит счёт сессии со счётчиками самих адаптеров.
 
         Сессия видит токены и деньги, адаптер — повторы, паузы и обрывы по
         пределу. В отчёт нужно и то и другое, поэтому склеиваем здесь.
         """
-        сводка = {имя: dict(данные) for имя, данные in self.по_провайдерам.items()}
-        for имя, провайдер in self.провайдеры.items():
-            расход = getattr(провайдер, "расход", None)
-            строка = сводка.setdefault(имя, {})
-            if расход is not None:
-                строка["повторов"] = расход.повторов
-                строка["обрывов_по_пределу"] = расход.обрывов
-                строка["секунд_в_запросах"] = round(расход.секунд, 1)
-            добытые = getattr(провайдер, "добытые_расхождения", None)
-            if добытые:
-                строка["расхождения_выясненные_на_ходу"] = list(добытые)
+        summary = {name: dict(data) for name, data in self.provider_totals.items()}
+        for name, provider in self.providers.items():
+            usage = getattr(provider, "usage", None)
+            row = summary.setdefault(name, {})
+            if usage is not None:
+                row["retries"] = usage.retries
+                row["truncations_by_limit"] = usage.truncations
+                row["seconds_in_requests"] = round(usage.seconds, 1)
+            observed = getattr(provider, "observed_discrepancies", None)
+            if observed:
+                row["расхождения_выясненные_на_ходу"] = list(observed)
             # Доля попаданий в кэш: влияет и на цену, и на скорость, и на статью.
-            всего_входа = строка.get("вход", 0) + строка.get("кэш_чтение", 0)
-            if всего_входа:
-                строка["доля_кэша"] = round(строка.get("кэш_чтение", 0) / всего_входа, 4)
-            if строка.get("выход"):
-                строка["доля_размышления"] = round(
-                    строка.get("размышление", 0) / строка["выход"], 4
+            total_of_input = row.get("input", 0) + row.get("cache_read", 0)
+            if total_of_input:
+                row["share_cache"] = round(row.get("cache_read", 0) / total_of_input, 4)
+            if row.get("output"):
+                row["share_reasoning"] = round(
+                    row.get("reasoning", 0) / row["output"], 4
                 )
-            if "деньги_usd" in строка:
-                строка["деньги_usd"] = round(строка["деньги_usd"], 6)
+            if "деньги_usd" in row:
+                row["cost_usd"] = round(row["cost_usd"], 6)
             # У Claude денег по подписке не списывается: SDK отдаёт пересчёт.
-            if имя == "claude":
-                строка["оговорка"] = ("подписка: сумма расчётная, счёта за неё нет")
-        return сводка
+            if name == "claude":
+                row["оговорка"] = ("подписка: сумма расчётная, счёта за неё нет")
+        return summary
 
-    def _свести_ресурсы(self) -> dict:
+    def _collate_resources(self) -> dict:
         """Что заявлено, что подтверждено и с чем закончили.
 
         Судья читает транскрипт и не видит состояния скрипта, поэтому разницу
         между «сказал, что тратит» и «потратил» ему надо подать числом. Без
         этого он снова засчитает за трату слова — как в прошлых прогонах.
         """
-        сводка: dict[str, dict] = {}
-        for имя in self.имена:
-            строка = {"заявлено": {}, "подтверждено": {}, "решимость_начислена": 0,
+        summary: dict[str, dict] = {}
+        for name in self.names:
+            row = {"заявлено": {}, "подтверждено": {}, "решимость_начислена": 0,
                       "провалов_можно_было_перебросить": 0}
-            if self.боевка and имя in self.боевка.бойцы:
-                строка["на_финише"] = self.боевка.ресурсы(имя)
-                строка["мотивация"] = self.боевка.лист(имя).мотивация
-            сводка[имя] = строка
+            if self.combat and name in self.combat.combatants:
+                row["на_финише"] = self.combat.resources(name)
+                row["motivation"] = self.combat.sheet(name).motivation
+            summary[name] = row
 
-        for событие in self.ресурсы_события:
-            строка = сводка.get(событие["кто"])
-            if строка is None:
+        for event in self.resources_events:
+            row = summary.get(event["who"])
+            if row is None:
                 continue
-            ресурс = событие["ресурс"]
+            resource = event["resource"]
             # Начисление опознаём по виду события, а не по величине: неудавшееся
             # начисление приходит с нулём, и по «if начислено» оно проваливалось
             # в ветку трат — мастерская щедрость засчитывалась игроку за попытку
             # что-то потратить.
-            if событие.get("вид") == "начисление":
-                строка["решимость_начислена"] += событие.get("начислено") or 0
+            if event.get("variant") == "начисление":
+                row["решимость_начислена"] += event.get("начислено") or 0
                 continue
-            строка["заявлено"][ресурс] = строка["заявлено"].get(ресурс, 0) + 1
-            if событие.get("подтверждено"):
-                строка["подтверждено"][ресурс] = строка["подтверждено"].get(ресурс, 0) + 1
+            row["заявлено"][resource] = row["заявлено"].get(resource, 0) + 1
+            if event.get("подтверждено"):
+                row["подтверждено"][resource] = row["подтверждено"].get(resource, 0) + 1
 
         # Сколько раз у игрока был провал, который можно было перебросить.
         # Без этого числа упрёк «доиграл с полными руками» несправедлив: может,
         # и случая не было.
-        for имя, сколько in self.провалы_игроков.items():
-            if имя in сводка:
-                сводка[имя]["провалов_можно_было_перебросить"] = сколько
-        return сводка
+        for name, amount in self.player_failures.items():
+            if name in summary:
+                summary[name]["провалов_можно_было_перебросить"] = amount
+        return summary
 
-    def _итоги(self) -> None:
-        средняя = {
-            имя: round(данные["символов"] / данные["ходов"], 1) if данные["ходов"] else 0
-            for имя, данные in self.счётчики.items()
+    def _totals(self) -> None:
+        mean = {
+            name: round(data["chars"] / data["turns"], 1) if data["turns"] else 0
+            for name, data in self.counters.items()
         }
-        self.журнал.записать(
+        self.logbook.write(
             "итог",
-            кругов=self.круг,
-            остановка=self.остановка,
-            минут=round(self.журнал.прошло_секунд / 60, 1),
-            счётчики=self.счётчики,
-            отыграно_кругов=self.отыграно,
-            выбывшие={имя: данные for имя, данные in self.выбывшие.items()} or None,
-            средняя_длина_реплики=средняя,
-            токенов=self.токенов,
-            по_провайдерам=self._свести_провайдеров() or None,
-            отказов=len(self.отказы) or None,
-            отказы=self.отказы or None,
-            фактические_модели=self.фактические_модели,
-            стоимость_usd=round(self.стоимость, 4),
-            ресурсы=self._свести_ресурсы() or None,
-            порча_языка=self.порча_языка or None,
-            бросков=self.кубики.бросков,
-            зерно=self.кубики.зерно,
-            подкручено_бросков=self.кубики.подкручено or None,
-            бой=self.боевка.итоги() if self.боевка else None,
+            rounds=self.round,
+            stop=self.stop,
+            minutes=round(self.logbook.elapsed_seconds / 60, 1),
+            counters=self.counters,
+            rounds_played=self.played,
+            down={name: data for name, data in self.down.items()} or None,
+            mean_length_lines=mean,
+            tokens=self.token_totals,
+            provider_totals=self._collate_providers() or None,
+            refusal_count=len(self.refusals) or None,
+            refusals=self.refusals or None,
+            actual_models=self.actual_models,
+            cost_usd=round(self.cost, 4),
+            resources=self._collate_resources() or None,
+            corruption_language=self.corruption_language or None,
+            rolls=self.dice.rolls,
+            seed=self.dice.seed,
+            rigged_rolls=self.dice.rigged or None,
+            combat=self.combat.totals() if self.combat else None,
         )

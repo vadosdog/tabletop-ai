@@ -16,170 +16,170 @@
 
 from __future__ import annotations
 
-from .base import зарегистрировать
-from .настройки import ключ
-from .общий import ОшибкаПровайдера, ПровайдерHTTP, Разбор, СессияHTTP, Токены
+from .base import register
+from .settings import key
+from .common import ProviderError, HttpProvider, ParsedResponse, HttpSession, Tokens
 
 
-def _поле(источник: dict, *имена, умолчание=None):
+def _field(source: dict, *names, default=None):
     """Достаёт поле, как бы вендор его ни назвал: thoughts_token_count или ...Count."""
-    for имя in имена:
-        if имя in источник and источник[имя] is not None:
-            return источник[имя]
-    return умолчание
+    for name in names:
+        if name in source and source[name] is not None:
+            return source[name]
+    return default
 
 
-def _собрать_текст(узел) -> list[str]:
+def _build_text(node) -> list[str]:
     """Обходит ответ и собирает всё, что похоже на текст модели.
 
     Мысли (`thought: true`) в реплику не берём: это внутреннее рассуждение, оно
     учитывается токенами, но за столом его не слышно.
     """
-    куски: list[str] = []
-    if isinstance(узел, dict):
-        if узел.get("thought") is True:
-            return куски
-        if isinstance(узел.get("text"), str) and узел["text"].strip():
-            куски.append(узел["text"])
-            return куски
-        for ключ_поля in ("output", "candidates", "content", "contents", "parts", "message"):
-            if ключ_поля in узел:
-                куски += _собрать_текст(узел[ключ_поля])
-    elif isinstance(узел, list):
-        for элемент in узел:
-            куски += _собрать_текст(элемент)
-    return куски
+    chunks: list[str] = []
+    if isinstance(node, dict):
+        if node.get("thought") is True:
+            return chunks
+        if isinstance(node.get("text"), str) and node["text"].strip():
+            chunks.append(node["text"])
+            return chunks
+        for key_fields in ("output", "candidates", "content", "contents", "parts", "message"):
+            if key_fields in node:
+                chunks += _build_text(node[key_fields])
+    elif isinstance(node, list):
+        for item in node:
+            chunks += _build_text(item)
+    return chunks
 
 
-def _найти_причину(данные: dict) -> str | None:
+def _find_reason(data: dict) -> str | None:
     """finish_reason добираемся хоть из корня, хоть из первого кандидата."""
-    прямая = _поле(данные, "finish_reason", "finishReason")
-    if прямая:
-        return str(прямая)
-    for элемент in (данные.get("candidates") or данные.get("output") or []):
-        if isinstance(элемент, dict):
-            причина = _поле(элемент, "finish_reason", "finishReason")
-            if причина:
-                return str(причина)
-    блок = данные.get("prompt_feedback") or данные.get("promptFeedback") or {}
-    if isinstance(блок, dict) and _поле(блок, "block_reason", "blockReason"):
+    direct = _field(data, "finish_reason", "finishReason")
+    if direct:
+        return str(direct)
+    for item in (data.get("candidates") or data.get("output") or []):
+        if isinstance(item, dict):
+            reason = _field(item, "finish_reason", "finishReason")
+            if reason:
+                return str(reason)
+    block = data.get("prompt_feedback") or data.get("promptFeedback") or {}
+    if isinstance(block, dict) and _field(block, "block_reason", "blockReason"):
         return "blocked"
     return None
 
 
-class ПровайдерGemini(ПровайдерHTTP):
-    имя = "gemini"
-    базовый_url = "https://generativelanguage.googleapis.com/v1beta/interactions"
+class GeminiProvider(HttpProvider):
+    name = "gemini"
+    base_url = "https://generativelanguage.googleapis.com/v1beta/interactions"
 
-    СНИМАЕМЫЕ = ("temperature", "top_p", "thinking_level")
+    CLEARABLE = ("temperature", "top_p", "thinking_level")
 
-    def __init__(self, *доводы, **именованные):
-        super().__init__(*доводы, **именованные)
-        self.склеивать_историю = False
+    def __init__(self, *arguments, **named):
+        super().__init__(*arguments, **named)
+        self.merge_history = False
 
     def _url(self) -> str:
-        return self.базовый_url
+        return self.base_url
 
-    def _заголовки(self, сессия: СессияHTTP) -> dict[str, str]:
+    def _headings(self, session: HttpSession) -> dict[str, str]:
         return {
-            "x-goog-api-key": ключ(self.имя),
+            "x-goog-api-key": key(self.name),
             "Content-Type": "application/json",
         }
 
-    def _тело(self, сессия: СессияHTTP) -> dict:
-        if self.склеивать_историю:
-            вход = "\n\n".join(
-                f"{'ВЕДУЩИЙ' if шаг['роль'] == 'user' else 'ТЫ'}: {шаг['текст']}"
-                for шаг in сессия.история
+    def _body(self, session: HttpSession) -> dict:
+        if self.merge_history:
+            input = "\n\n".join(
+                f"{'ВЕДУЩИЙ' if step['role'] == 'user' else 'ТЫ'}: {step['text']}"
+                for step in session.history
             )
         else:
-            вход = [
+            input = [
                 {
-                    "role": "user" if шаг["роль"] == "user" else "model",
-                    "parts": [{"text": шаг["текст"]}],
+                    "role": "user" if step["role"] == "user" else "model",
+                    "parts": [{"text": step["text"]}],
                 }
-                for шаг in сессия.история
+                for step in session.history
             ]
 
-        настройки: dict = {"max_output_tokens": self.параметры.предел_ответа}
-        уровень = self.параметры.уровень(self.имя)
-        if уровень and "thinking_level" not in self.отброшенные:
-            настройки["thinking_level"] = уровень
-        if self.параметры.температура is not None and "temperature" not in self.отброшенные:
-            настройки["temperature"] = self.параметры.температура
-        if self.параметры.top_p is not None and "top_p" not in self.отброшенные:
-            настройки["top_p"] = self.параметры.top_p
+        settings: dict = {"max_output_tokens": self.params.max_output}
+        level = self.params.level(self.name)
+        if level and "thinking_level" not in self.dropped:
+            settings["thinking_level"] = level
+        if self.params.temperature is not None and "temperature" not in self.dropped:
+            settings["temperature"] = self.params.temperature
+        if self.params.top_p is not None and "top_p" not in self.dropped:
+            settings["top_p"] = self.params.top_p
 
         return {
-            "model": сессия.модель,
-            "input": вход,
-            "system_instruction": сессия.системный_промпт,
-            "generation_config": настройки,
+            "model": session.model,
+            "input": input,
+            "system_instruction": session.system_prompt,
+            "generation_config": settings,
         }
 
-    def _снять_отвергнутое(self, ответ: str) -> str | None:
+    def _clear_rejected(self, reply: str) -> str | None:
         """Сначала пробуем спасти форму истории, потом уже снимать параметры."""
-        низ = ответ.lower()
-        if not self.склеивать_историю and "input" in низ and any(
-            с in низ for с in ("invalid", "expected", "unsupported", "type")
+        tail = reply.lower()
+        if not self.merge_history and "input" in tail and any(
+            s in tail for s in ("invalid", "expected", "unsupported", "type")
         ):
-            self.склеивать_историю = True
-            self.добытые_расхождения.append(
+            self.merge_history = True
+            self.observed_discrepancies.append(
                 "массив ходов в поле input не принят — история склеивается в одну "
                 "строку. Кэш по префиксу при этом работает хуже, доля попаданий "
                 "ниже, чем у остальных троих (видно в таблице кэша)."
             )
             return "input"
-        return super()._снять_отвергнутое(ответ)
+        return super()._clear_rejected(reply)
 
-    def _разобрать(self, данные: dict) -> Разбор:
-        куски = _собрать_текст(данные)
-        причина = _найти_причину(данные)
+    def _parse(self, data: dict) -> ParsedResponse:
+        chunks = _build_text(data)
+        reason = _find_reason(data)
 
-        usage = данные.get("usage_metadata") or данные.get("usageMetadata") or \
-            данные.get("usage") or {}
-        кэш = int(_поле(usage, "cached_content_token_count", "cachedContentTokenCount",
-                        "cached_token_count", "cachedTokenCount", умолчание=0) or 0)
-        вход = int(_поле(usage, "prompt_token_count", "promptTokenCount",
-                         "input_token_count", "inputTokenCount", умолчание=0) or 0)
-        выход = int(_поле(usage, "candidates_token_count", "candidatesTokenCount",
-                          "output_token_count", "outputTokenCount", умолчание=0) or 0)
-        мысли = int(_поле(usage, "thoughts_token_count", "thoughtsTokenCount",
-                          умолчание=0) or 0)
+        usage = data.get("usage_metadata") or data.get("usageMetadata") or \
+            data.get("usage") or {}
+        cache = int(_field(usage, "cached_content_token_count", "cachedContentTokenCount",
+                        "cached_token_count", "cachedTokenCount", default=0) or 0)
+        input = int(_field(usage, "prompt_token_count", "promptTokenCount",
+                         "input_token_count", "inputTokenCount", default=0) or 0)
+        output = int(_field(usage, "candidates_token_count", "candidatesTokenCount",
+                          "output_token_count", "outputTokenCount", default=0) or 0)
+        thoughts = int(_field(usage, "thoughts_token_count", "thoughtsTokenCount",
+                          default=0) or 0)
 
-        токены = Токены(
+        tokens = Tokens(
             # prompt_token_count у Google включает кэшированное: не вычесть —
             # вход задваивается и доля кэша выходит бессмысленной.
-            вход=max(0, вход - кэш),
+            input=max(0, input - cache),
             # Мысли Google считает отдельно от candidates, а берёт за них цену
             # выхода. Приводим к общему виду: выход = видимое плюс мысли.
-            выход=выход + мысли,
-            размышление=мысли,
-            кэш_чтение=кэш,
-            сырое=usage,
+            output=output + thoughts,
+            reasoning=thoughts,
+            cache_read=cache,
+            raw=usage,
         )
 
-        текст = "\n\n".join(к.strip() for к in куски if к.strip()).strip()
-        сигнал = причина if причина in (
+        text = "\n\n".join(d.strip() for d in chunks if d.strip()).strip()
+        signal = reason if reason in (
             "SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "IMAGE_SAFETY", "blocked"
         ) else None
 
-        if not текст and сигнал is None and причина not in ("MAX_TOKENS", "length"):
+        if not text and signal is None and reason not in ("MAX_TOKENS", "length"):
             # Текста нет, и вендор не объяснил почему. Это не «персонаж
             # промолчал», это мы не поняли ответ — надо увидеть его целиком.
-            raise ОшибкаПровайдера(
-                f"gemini: в ответе не найдено текста, причина {причина!r}. "
-                f"Сырой ответ: {str(данные)[:1200]}"
+            raise ProviderError(
+                f"gemini: в ответе не найдено текста, причина {reason!r}. "
+                f"Сырой ответ: {str(data)[:1200]}"
             )
 
-        return Разбор(
-            текст=текст,
-            токены=токены,
-            модель_факт=данные.get("model") or данные.get("model_version")
-            or данные.get("modelVersion"),
-            сигнал_отказа=сигнал,
-            оборван=причина in ("MAX_TOKENS", "length"),
+        return ParsedResponse(
+            text=text,
+            tokens=tokens,
+            model_actual=data.get("model") or data.get("model_version")
+            or data.get("modelVersion"),
+            signal_refusal=signal,
+            truncated=reason in ("MAX_TOKENS", "length"),
         )
 
 
-зарегистрировать("gemini", ПровайдерGemini)
+register("gemini", GeminiProvider)
