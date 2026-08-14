@@ -97,13 +97,13 @@ DELIVERIES = [ev for ev in EVENTS if ev["event_type"] == "доставка"]
 TOTAL = [ev for ev in EVENTS if ev["event_type"] == "итог"][0]
 
 
-def тест_прогон_не_упал():
+def test_run_survives_a_refusal():
     """Отказ — не сбой. Круги идут дальше до своего предела."""
     assert RUN.stop == "предел_кругов", RUN.stop
     assert RUN.round == 4
 
 
-def тест_отказ_не_повторяется():
+def test_refusal_is_never_retried():
     """Ровно одно обращение на ход. Тихий ретрай спрятал бы самое интересное."""
     turns = len([t for t in TURNS if t["speaker"] == REFUSING])
     assert RefusingSession.requests == turns, (
@@ -111,7 +111,7 @@ def тест_отказ_не_повторяется():
     )
 
 
-def тест_отказ_записан_отдельным_событием():
+def test_refusal_logged_as_its_own_event():
     refusals = [t for t in TURNS
                 if t["speaker"] == REFUSING and "отказ" in (t.get("tags") or [])]
     assert refusals, "ни один отказ не помечен"
@@ -120,7 +120,7 @@ def тест_отказ_записан_отдельным_событием():
         assert TEXT_REFUSAL[:40] in turn["text"], "цитата не сохранена"
 
 
-def тест_текст_отказа_не_утёк_за_стол():
+def test_refusal_text_does_not_leak_to_the_table():
     """Ни мастер, ни другие игроки не должны увидеть нравоучение."""
     for event in EVENTS:
         text = event.get("text") or ""
@@ -131,7 +131,7 @@ def тест_текст_отказа_не_утёк_за_стол():
     assert all(dt["chars"] < 100_000 for dt in DELIVERIES)
 
 
-def тест_счётчик_и_цитаты_дошли_до_итога():
+def test_count_and_quotes_reach_the_summary():
     assert TOTAL.get("refusals"), "в итоге нет счётчика отказов"
     quotes = TOTAL.get("refusals") or []
     assert quotes, "в итоге нет цитат"
@@ -141,7 +141,7 @@ def тест_счётчик_и_цитаты_дошли_до_итога():
         assert "языковая модель" in entry["quote"]
 
 
-def тест_отказ_учтён_по_провайдеру():
+def test_refusal_counted_against_its_provider():
     line = (TOTAL.get("provider_totals") or {}).get("refusing") or {}
     assert line.get("refusals"), "отказы не легли в счётчик провайдера"
 
@@ -149,7 +149,7 @@ def тест_отказ_учтён_по_провайдеру():
 if __name__ == "__main__":
     failures = 0
     for name, func in sorted(globals().items()):
-        if name.startswith("тест_"):
+        if name.startswith("test_"):
             try:
                 func()
                 print(f"  ok   {name}")

@@ -13,7 +13,7 @@ from src.dice import Dice, modifier_difficulties  # noqa: E402
 CONFIG = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
 
 
-def тест_таблица_сложности():
+def test_difficulty_table():
     assert modifier_difficulties("очень легко") == (60, True)
     assert modifier_difficulties("Средне") == (20, True)
     assert modifier_difficulties("испытание") == (0, True)
@@ -24,14 +24,14 @@ def тест_таблица_сложности():
     assert modifier_difficulties("невозможно") == (0, False)
 
 
-def тест_цель_по_характеристике():
+def test_target_from_characteristic():
     d = Dice(CONFIG, 1)
     c = d.roll("Курт", "Сила воли", "трудно")
     assert c.base == 30 and c.modifier == -10 and c.target == 20
     assert c.characteristic == "Сила воли" and c.advances == 0
 
 
-def тест_цель_по_навыку():
+def test_target_from_skill():
     d = Dice(CONFIG, 1)
     # Восприятие стоит на Инициативе; у Ханны навык обученный, отсюда надбавка.
     c = d.roll("Ханна", "Восприятие", "испытание")
@@ -44,7 +44,7 @@ def тест_цель_по_навыку():
     assert untrained.target == 41 + 20
 
 
-def тест_бросок_за_персонажа_мира():
+def test_roll_for_npc():
     d = Dice(CONFIG, 1)
     # У Гретель Обман задан числом прямо в карточке — оно старше расчёта.
     c = d.roll("Гретель", "Обман", "испытание")
@@ -55,26 +55,26 @@ def тест_бросок_за_персонажа_мира():
     assert by_characteristic.characteristic == "Ловкость"
 
 
-def тест_явная_база_от_мастера():
+def test_explicit_base_from_gm():
     d = Dice(CONFIG, 1)
     c = d.roll("Хозяин мельницы", "Обман", "средне", explicit_base=45)
     assert c.target == 65 and "база_от_мастера" in c.tags
 
 
-def тест_нпс_без_карточки_помечается():
+def test_npc_without_card_is_tagged():
     d = Dice(CONFIG, 1)
     c = d.roll("Кто-то безымянный", "Обман", "средне")
     assert "нпс_без_карточки" in c.tags
 
 
-def тест_неизвестный_навык_помечается():
+def test_unknown_skill_is_tagged():
     d = Dice(CONFIG, 1)
     c = d.roll("Курт", "Жонглирование", "средне")
     assert "неизвестный_навык" in c.tags
     assert c.target == CONFIG["default_base"] + 20
 
 
-def тест_уровни_успеха():
+def test_success_levels():
     d = Dice(CONFIG, 1)
     c = d.roll("Курт", "Боевые навыки", "средне")  # цель 65
     c.rolled = 54
@@ -82,7 +82,7 @@ def тест_уровни_успеха():
     assert (c.target // 10) - (54 // 10) == 1
 
 
-def тест_автоматика():
+def test_automatic_success_and_failure():
     # 01–05 успех всегда, 96–100 провал всегда, даже против высокой цели.
     d = Dice(CONFIG, 1)
     successes = failures = 0
@@ -98,7 +98,7 @@ def тест_автоматика():
     assert successes and failures, "за 400 зёрен автоматика ни разу не сработала"
 
 
-def тест_дубль_на_обычной_проверке():
+def test_doubles_on_ordinary_check():
     # Вне боя дубль — тоже событие: выдающийся успех или фумбл.
     for seed in range(300):
         d = Dice(CONFIG, seed)
@@ -111,7 +111,7 @@ def тест_дубль_на_обычной_проверке():
     raise AssertionError("за 300 зёрен дубль ни разу не выпал")
 
 
-def тест_воспроизводимость():
+def test_reproducible_by_seed():
     first = [Dice(CONFIG, 777).roll("Курт", "Сила", "средне").rolled for _ in range(1)]
     d = Dice(CONFIG, 777)
     rolls = [d.roll("Курт", "Сила", "средне").rolled for _ in range(10)]
@@ -124,7 +124,7 @@ def тест_воспроизводимость():
 if __name__ == "__main__":
     failed = 0
     for name, func in sorted(globals().items()):
-        if name.startswith("тест_"):
+        if name.startswith("test_"):
             try:
                 func()
                 print(f"  ok   {name}")

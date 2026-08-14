@@ -47,7 +47,7 @@ def reply(upstream="Alibaba", **more) -> dict:
     return stem
 
 
-def тест_апстрим_закреплён_и_фолбэк_запрещён():
+def test_upstream_pinned_and_fallback_forbidden():
     body = make()._body(FakeSession())
     block = body["provider"]
     assert block["order"] == ["alibaba"], block
@@ -58,7 +58,7 @@ def тест_апстрим_закреплён_и_фолбэк_запрещён(
     )
 
 
-def тест_без_списка_апстримов_не_стартуем():
+def test_refuses_to_start_without_upstream_list():
     """Пустой список означал бы «маршрутизируй как хочешь»."""
     for empty in (None, [], [""]):
         try:
@@ -68,7 +68,7 @@ def тест_без_списка_апстримов_не_стартуем():
         raise AssertionError(f"пустой список {empty!r} проглочен")
 
 
-def тест_параметры_генерации_доходят():
+def test_generation_params_reach_upstream():
     body = make()._body(FakeSession())
     assert body["temperature"] == 1.0
     # Лимит поднят до 16000: размышление Qwen растёт вместе с контекстом.
@@ -80,7 +80,7 @@ def тест_параметры_генерации_доходят():
     assert body["usage"] == {"include": True}, "не просим прослойку посчитать деньги"
 
 
-def тест_явный_кэш_метит_системный_промпт():
+def test_explicit_cache_marks_system_prompt():
     messages = make()._body(FakeSession())["messages"]
     system = messages[0]
     assert isinstance(system["content"], list), "пометка кэша не поставлена"
@@ -89,7 +89,7 @@ def тест_явный_кэш_метит_системный_промпт():
     assert isinstance(messages[1]["content"], str)
 
 
-def тест_кэш_снимается_если_апстрим_его_не_принял():
+def test_cache_dropped_if_upstream_rejects_it():
     provider = make()
     removed = provider._clear_rejected(
         '{"error":{"message":"Unsupported field: cache_control"}}'
@@ -101,19 +101,19 @@ def тест_кэш_снимается_если_апстрим_его_не_пр�
     assert isinstance(provider._body(FakeSession())["messages"][0]["content"], str)
 
 
-def тест_кто_ответил_попадает_в_каждый_ход():
+def test_actual_responder_logged_every_turn():
     provider = make()
     parsed = provider._parse(reply())
     assert parsed.upstream == "Alibaba"
     assert "@ Alibaba" in parsed.model_actual, parsed.model_actual
 
 
-def тест_деньги_берутся_у_прослойки():
+def test_cost_taken_from_the_router():
     parsed = make()._parse(reply())
     assert parsed.cost == 0.00123, "usage.cost проигнорирован"
 
 
-def тест_кэш_и_размышление_разобраны():
+def test_cache_and_reasoning_are_parsed():
     parsed = make()._parse(reply())
     assert parsed.tokens.cache_read == 800
     # Вход без кэшированных: иначе он задваивается и доля кэша врёт.
@@ -121,7 +121,7 @@ def тест_кэш_и_размышление_разобраны():
     assert parsed.tokens.reasoning == 12
 
 
-def тест_размышление_внутри_или_рядом_с_выходом():
+def test_reasoning_inside_or_beside_output():
     """Общего правила нет, и ошибка стоит половины счёта.
 
     Payload'ы настоящие, с круга ноль 2026-08-11. У xAI сумма сходится только
@@ -148,7 +148,7 @@ def тест_размышление_внутри_или_рядом_с_выход
     assert inside.reasoning == 2896
 
 
-def тест_заголовки_только_ascii():
+def test_headers_are_ascii_only():
     """Персонажей зовут Курт и Ханна, а заголовки обязаны быть ASCII.
 
     Кириллица в заголовке роняет запрос не на сервере, а в клиенте — с
@@ -178,7 +178,7 @@ def тест_заголовки_только_ascii():
                     )
 
 
-def тест_метка_агента_устойчива_и_различает():
+def test_agent_tag_is_stable_and_distinguishes():
     """На неё опирается липкость кэша: не совпадёт между кругами — кэш мимо."""
     from src.providers.common import tag_agent
 
@@ -187,7 +187,7 @@ def тест_метка_агента_устойчива_и_различает():
     tag_agent("Ханна").encode("ascii")
 
 
-def тест_смена_апстрима_это_событие():
+def test_upstream_switch_is_an_event():
     events = []
     provider = make(logbook=lambda kind, **fields: events.append({"kind": kind, **fields}))
 
@@ -207,7 +207,7 @@ def тест_смена_апстрима_это_событие():
 if __name__ == "__main__":
     failures = 0
     for name, func in sorted(globals().items()):
-        if name.startswith("тест_"):
+        if name.startswith("test_"):
             try:
                 func()
                 print(f"  ok   {name}")

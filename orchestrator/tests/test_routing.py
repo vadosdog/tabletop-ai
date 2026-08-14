@@ -61,7 +61,7 @@ DELIVERIES = [ev for ev in EVENTS if ev["event_type"] == "доставка"]
 ANOMALIES = [ev for ev in EVENTS if ev["event_type"] == "аномалия"]
 
 
-def тест_ротация_в_разговоре():
+def test_rotation_in_talk_mode():
     base = CONFIG["base_order"]
     talk = [ev for ev in ROUNDS.values() if ev["mode"] == "РАЗГОВОР"]
     assert len(talk) >= 5, "сухой прогон не задел пять разговорных кругов"
@@ -74,7 +74,7 @@ def тест_ротация_в_разговоре():
         )
 
 
-def тест_в_действии_ходы_не_доставляются():
+def test_turns_are_not_delivered_in_action_mode():
     for round, event in ROUNDS.items():
         if event["mode"] != "ДЕЙСТВИЕ":
             continue
@@ -86,7 +86,7 @@ def тест_в_действии_ходы_не_доставляются():
         assert not between_players, f"в круге {round} игроки увидели друг друга в действии"
 
 
-def тест_тайный_ход_никому_кроме_мастера():
+def test_secret_turn_goes_only_to_the_gm():
     secret = [t for t in TURNS if t["visibility"] == "только мастеру"]
     assert secret, "в сухом прогоне не было ни одного тайного хода"
     for turn in secret:
@@ -104,7 +104,7 @@ def тест_тайный_ход_никому_кроме_мастера():
         assert recipient, "тайный ход не дошёл до мастера"
 
 
-def тест_личный_блок_адресный():
+def test_private_block_reaches_only_its_addressee():
     private = [t for t in TURNS if t["visibility"].startswith("только ")
               and t["speaker"] == "Мастер"]
     assert private, "мастер ни разу не выдал личный блок"
@@ -123,7 +123,7 @@ def тест_личный_блок_адресный():
                 assert amount == 1, f"{other} увидел личный блок для {to}"
 
 
-def тест_круг_ноль_последователен():
+def test_round_zero_is_sequential():
     zeroes = [t for t in TURNS if t["round"] == 0 and t["speaker"] != "Мастер"]
     assert [t["speaker"] for t in zeroes] == CONFIG["round_zero_order"]
     # Каждый ход немедленно уходит троим остальным.
@@ -133,24 +133,24 @@ def тест_круг_ноль_последователен():
         assert len(recipients) == 3, f"ход {turn['speaker']} ушёл не троим: {recipients}"
 
 
-def тест_мастер_молчит_в_круге_ноль_до_представлений():
+def test_gm_stays_silent_in_round_zero_until_introductions():
     order = [ev for ev in EVENTS if ev["event_type"] == "ход" and ev["round"] == 0]
     assert order[-1]["speaker"] == "Мастер", "мастер вступил не последним"
     assert "вводная" in order[-1].get("tags", [])
 
 
-def тест_самобросок_пойман_у_обоих():
+def test_self_roll_caught_on_both_sides():
     who = {at["speaker"] for at in ANOMALIES if "самоброс" in at["tags"]}
     assert "Мастер" in who and who & set(CONFIG["base_order"]), (
         f"самоброски пойманы не у всех: {who}"
     )
 
 
-def тест_пропуск_тега_режима_логируется():
+def test_missing_mode_tag_is_logged():
     assert any("тег_режима_пропущен" in at["tags"] for at in ANOMALIES)
 
 
-def тест_броски_только_от_скрипта():
+def test_only_the_script_rolls_dice():
     rolls = [ev for ev in EVENTS if ev["event_type"] == "бросок"]
     assert rolls, "ни одного броска не сделано"
     for ev in rolls:
@@ -159,7 +159,7 @@ def тест_броски_только_от_скрипта():
         assert ev["roll"]["seed"] == CONFIG["seed"]
 
 
-def тест_выбытие_исключает_из_круга():
+def test_going_down_excludes_from_the_round():
     down_events = [ev for ev in EVENTS if ev["event_type"] == "выбытие"]
     assert down_events, "в сухом прогоне никто не выбыл"
     down = down_events[0]["speaker"]
@@ -182,7 +182,7 @@ def тест_выбытие_исключает_из_круга():
         assert not turns, f"выбывший {down} сходил в круге {round}"
 
 
-def тест_выбывшему_ничего_не_доставляют():
+def test_nothing_is_delivered_to_a_downed_player():
     down_events = [ev for ev in EVENTS if ev["event_type"] == "выбытие"]
     comebacks = [ev for ev in EVENTS if ev["event_type"] == "возвращение"]
     if not down_events:
@@ -194,7 +194,7 @@ def тест_выбывшему_ничего_не_доставляют():
     assert not leaks, f"выбывшему {who} что-то доставили: {leaks[:2]}"
 
 
-def тест_возвращение_возвращает_в_строй():
+def test_comeback_returns_to_the_rotation():
     comebacks = [ev for ev in EVENTS if ev["event_type"] == "возвращение"]
     assert comebacks
     who, round = comebacks[0]["speaker"], comebacks[0]["round"]
@@ -203,13 +203,13 @@ def тест_возвращение_возвращает_в_строй():
     assert who in following[0]["order"], "вернувшегося не спросили"
 
 
-def тест_сторожок_залипания():
+def test_watchdog_for_a_stuck_mode():
     assert any("залипание_режима" in at["tags"] for at in ANOMALIES), (
         "три круга ДЕЙСТВИЯ подряд не дали предупреждения"
     )
 
 
-def тест_счётчик_круга_в_шапке():
+def test_round_counter_in_the_header():
     # Мастер должен видеть «Круг N из M» — без этого он не торопится.
     for index, event in ROUNDS.items():
         header = event.get("header_gm", "")
@@ -219,13 +219,13 @@ def тест_счётчик_круга_в_шапке():
     assert after_down and "Выбыли:" in after_down[0]["header_gm"]
 
 
-def тест_отыграно_кругов_в_итоге():
+def test_rounds_played_in_the_summary():
     total = [ev for ev in EVENTS if ev["event_type"] == "итог"][-1]
     played = total.get("rounds_played")
     assert played and set(played) == set(CONFIG["base_order"])
 
 
-def тест_остановка_по_финалу():
+def test_run_stops_on_the_finale_tag():
     total = [ev for ev in EVENTS if ev["event_type"] == "итог"][-1]
     assert total["stop"] == "финал", total["stop"]
 
@@ -233,7 +233,7 @@ def тест_остановка_по_финалу():
 if __name__ == "__main__":
     failed = 0
     for name, func in sorted(globals().items()):
-        if name.startswith("тест_"):
+        if name.startswith("test_"):
             try:
                 func()
                 print(f"  ok   {name}")

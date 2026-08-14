@@ -37,14 +37,14 @@ def combat(rolls) -> Combat:
 
 # --- листы и формула ------------------------------------------------------
 
-def тест_формула_ран():
+def test_wounds_formula():
     c = combat([])
     # Контрольные цифры из брифа: если не сходится — ошибка в реализации.
     assert [c.sheet(i).wounds_max for i in ("Ханна", "Ансельм", "Курт", "Лизель")] \
         == [12, 13, 15, 11]
 
 
-def тест_размеры_и_талант():
+def test_sizes_and_talent():
     c = combat([])
     characteristics = {"Сила": 40, "Выносливость": 40, "Сила воли": 30}   # 4, 4, 3
     assert c.wounds_by_formula(characteristics, "средний", {}) == 15
@@ -58,25 +58,25 @@ def тест_размеры_и_талант():
     assert c.wounds_by_formula(characteristics, "средний", {"выносливый": 2}) == 15 + 8
 
 
-def тест_бонус_первая_цифра():
+def test_bonus_is_first_digit():
     assert (bonus(45), bonus(40), bonus(9), bonus(100)) == (4, 4, 0, 10)
 
 
-def тест_локация_переворотом():
+def test_hit_location_reverses_digits():
     assert location(43) == "правая рука"      # 43 → 34
     assert location(10) == "голова"           # 10 → 01
     assert location(9) == "правая нога"       # 09 → 90
     assert location(55) == "корпус"
 
 
-def тест_дубли():
+def test_doubles():
     assert [c for c in range(1, 101) if doubles(c)] == \
         [11, 22, 33, 44, 55, 66, 77, 88, 99, 100]
 
 
 # --- атака ----------------------------------------------------------------
 
-def тест_попадание_и_урон():
+def test_hit_and_damage():
     # Курт (БН 45, СБ 4, меч 4) бьёт Тварь (БН 40, ТБ 4, броня 1 везде).
     # Атака 12 → УУ +3; защита 38 → УУ +1; разница +2.
     c = combat([12, 38])
@@ -89,7 +89,7 @@ def тест_попадание_и_урон():
     assert c.sheet("Тварь").wounds == 15 - 5
 
 
-def тест_промах_при_равной_разнице():
+def test_miss_on_equal_margin():
     # Оба выбросили одинаково: разница ноль — атака не проходит.
     c = combat([32, 32])
     total = c.attack("Курт", "Тварь", "меч")
@@ -97,7 +97,7 @@ def тест_промах_при_равной_разнице():
     assert c.sheet("Тварь").wounds == c.sheet("Тварь").wounds_max
 
 
-def тест_броня_гасит_урон():
+def test_armour_absorbs_damage():
     # Лизель (СБ 2, нож 2) по Сержанту (ТБ 4, броня 1 на руке).
     # Разница +1 → урон 5, защита 5 → ноль ран. Броски не дубли, иначе крит.
     c = combat([21, 50])
@@ -106,14 +106,14 @@ def тест_броня_гасит_урон():
     assert c.sheet("Сержант").wounds == c.sheet("Сержант").wounds_max
 
 
-def тест_арбалет_без_бонуса_силы():
+def test_crossbow_ignores_strength_bonus():
     c = combat([12, 90])
     total = c.attack("Курт", "Тварь", "арбалет")
     # Рейтинг 9 фиксированный, бонус Силы не прибавляется.
     assert total.damage_before_armour == 9 + total.margin
 
 
-def тест_пробивающий_берёт_десятки():
+def test_impaling_takes_tens_digit():
     # Молот Ансельма (БН 36): вместо уровней успеха берётся цифра десятков.
     c = combat([30, 50])
     total = c.attack("Ансельм", "Тварь", "молот")
@@ -122,7 +122,7 @@ def тест_пробивающий_берёт_десятки():
     assert total.margin < 3, "проверка бессмысленна, если разница и так больше"
 
 
-def тест_рубящий_портит_броню():
+def test_slashing_damages_armour():
     before = None
     c = combat([12, 90])
     before = c.sheet("Курт").armour["левая рука"]
@@ -133,7 +133,7 @@ def тест_рубящий_портит_броню():
 
 # --- дубли, криты, ноль ран ------------------------------------------------
 
-def тест_дубль_даёт_крит_при_полных_ранах():
+def test_doubles_crit_at_full_wounds():
     # Атака 22 — дубль и успех. Крит независимо от того, сколько ран у цели.
     c = combat([22, 90, 50])                      # третий бросок — по таблице критов
     total = c.attack("Курт", "Тварь", "меч")
@@ -142,7 +142,7 @@ def тест_дубль_даёт_крит_при_полных_ранах():
     assert c.sheet("Тварь").wounds_max > c.sheet("Тварь").wounds
 
 
-def тест_дубль_без_попадания_не_даёт_крит():
+def test_doubles_without_hit_give_no_crit():
     # Бросок удался, но защита была лучше: атака не прошла, калечить некого.
     c = combat([22, 11])
     total = c.attack("Ансельм", "Тварь", "молот")
@@ -151,20 +151,20 @@ def тест_дубль_без_попадания_не_даёт_крит():
     assert c.counters["crits"] == 0
 
 
-def тест_проваленный_дубль_это_фумбл():
+def test_failed_doubles_is_fumble():
     c = combat([99, 10])
     total = c.attack("Лизель", "Тварь", "нож")
     assert total.doubles and "фумбл" in total.tags and not total.hit
     assert c.counters["fumbles"] == 1
 
 
-def тест_сто_всегда_фумбл():
+def test_hundred_is_always_fumble():
     c = combat([100, 90])
     total = c.attack("Курт", "Тварь", "меч")
     assert total.doubles and "фумбл" in total.tags and not total.hit
 
 
-def тест_ноль_ран_не_смерть_а_крит():
+def test_zero_wounds_is_crit_not_death():
     c = combat([12, 90, 30])
     target = c.sheet("Лизель")
     target.wounds = 0                                  # уже на пределе, но жива
@@ -173,7 +173,7 @@ def тест_ноль_ран_не_смерть_а_крит():
     assert not target.dead, "ноль ран — не смерть"
 
 
-def тест_смерть_ждёт_решения_игрока():
+def test_death_awaits_player_decision():
     # Крит в голову с броском 100 по таблице — смерть, но Судьбу тратит игрок.
     c = combat([10, 90, 100])
     target = c.sheet("Лизель")
@@ -188,7 +188,7 @@ def тест_смерть_ждёт_решения_игрока():
     assert target.unconscious and not target.dead
 
 
-def тест_отказ_от_судьбы_убивает():
+def test_declining_fate_kills():
     c = combat([10, 90, 100])
     c.sheet("Лизель").wounds = 0
     c.attack("Тварь", "Лизель", "когти")
@@ -196,7 +196,7 @@ def тест_отказ_от_судьбы_убивает():
     assert c.sheet("Лизель").dead and c.counters["deaths"] == 1
 
 
-def тест_счётчик_критов_отрывает_конечность():
+def test_crit_count_severs_limb():
     c = combat([])
     target = c.sheet("Лизель")
     tb = target.tb
@@ -208,7 +208,7 @@ def тест_счётчик_критов_отрывает_конечность()
     assert "левая рука" in target.lost_limbs
 
 
-def тест_колющий_добивает_при_крите():
+def test_piercing_finishes_on_crit():
     CONFIG["weapons"]["пика"] = {"kind": "ближний", "рейтинг": 3, "qualities": ["колющий"]}
     c = combat([22, 90, 50])          # 22 — дубль, значит крит
     total = c.attack("Курт", "Тварь", "пика")
@@ -218,7 +218,7 @@ def тест_колющий_добивает_при_крите():
 
 # --- состояния и кровотечение ---------------------------------------------
 
-def тест_кровотечение_на_нуле():
+def test_bleeding_at_zero_wounds():
     c = combat([50])
     combatant = c.sheet("Ханна")
     combatant.wounds = 0
@@ -228,7 +228,7 @@ def тест_кровотечение_на_нуле():
     assert total["success"] is (total["rolled"] <= total["target"])
 
 
-def тест_провал_кровотечения_валит_без_сознания():
+def test_failed_bleeding_check_knocks_out():
     c = combat([99])
     combatant = c.sheet("Ханна")
     combatant.wounds = 0
@@ -237,7 +237,7 @@ def тест_провал_кровотечения_валит_без_созна�
     assert combatant.unconscious
 
 
-def тест_состояние_штрафует_проверку():
+def test_condition_penalises_check():
     c = combat([50, 50])
     target = c.sheet("Курт")
     without_conditions = c._roll(target, "Боевые навыки")[0]
@@ -248,7 +248,7 @@ def тест_состояние_штрафует_проверку():
 
 # --- видимость -------------------------------------------------------------
 
-def тест_игрок_видит_только_своё():
+def test_player_sees_only_own_sheet():
     c = combat([12, 90])
     c.attack("Тварь", "Курт", "когти")
     own = c.summary_player("Курт")
@@ -258,7 +258,7 @@ def тест_игрок_видит_только_своё():
     assert "Курт" in gm
 
 
-def тест_строка_состояния_показывает_все_четыре_ресурса():
+def test_status_line_shows_all_four_resources():
     """Она приходит каждый круг — на ней держится вся правка про ресурсы."""
     c = combat([12, 90])
     line = c.line_conditions("Курт")
@@ -269,7 +269,7 @@ def тест_строка_состояния_показывает_все_чет�
 if __name__ == "__main__":
     failed = 0
     for name, func in sorted(globals().items()):
-        if name.startswith("тест_"):
+        if name.startswith("test_"):
             try:
                 func()
                 print(f"  ok   {name}")

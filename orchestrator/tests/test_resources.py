@@ -32,7 +32,7 @@ def combat() -> Combat:
     return Combat(CONFIG, Dice(CONFIG, 1), ROOT / "crits.json")
 
 
-def тест_стартовые_значения_и_связь_потолков():
+def test_starting_values_and_linked_ceilings():
     c = combat()
     for name in NAMES:
         rp = c.resources(name)
@@ -45,7 +45,7 @@ def тест_стартовые_значения_и_связь_потолков(
         assert rp["resolve_max"] == rp["resilience"], name
 
 
-def тест_первое_начисление_решимости_ложится():
+def test_first_resolve_award_applies():
     """Ради этого стартовую Решимость и обнулили."""
     c = combat()
     total = c.award_resolve("Ханна", 1)
@@ -53,7 +53,7 @@ def тест_первое_начисление_решимости_ложится
     assert c.resources("Ханна")["resolve"] == 1
 
 
-def тест_судьба_даёт_выбрать_число_на_кубах():
+def test_fate_lets_the_player_choose_the_roll():
     """Второе применение Судьбы: в безнадёжном положении игрок берёт число сам."""
     c = combat()
     dice = Dice(CONFIG, 7)
@@ -77,7 +77,7 @@ def тест_судьба_даёт_выбрать_число_на_кубах():
     assert not c.sheet("Курт").unconscious
 
 
-def тест_подмена_пересчитывает_исход():
+def test_substitution_recomputes_the_outcome():
     """Иначе в лог уйдёт красивая единица с чужим успехом."""
     dice = Dice(CONFIG, 11)
     roll = dice.roll("Лизель", "Обман", "трудно")
@@ -87,7 +87,7 @@ def тест_подмена_пересчитывает_исход():
     assert dice.substitute(roll, 100, "проба").doubles, "100 обязан быть дублем"
 
 
-def тест_трата_судьбы_роняет_потолок_удачи():
+def test_spending_fate_lowers_the_fortune_ceiling():
     c = combat()
     c.apply_fate("Курт", True)
     rp = c.resources("Курт")
@@ -96,7 +96,7 @@ def тест_трата_судьбы_роняет_потолок_удачи():
     assert rp["fortune"] <= 1, "текущая Удача осталась выше нового потолка"
 
 
-def тест_трата_стойкости_роняет_потолок_решимости():
+def test_spending_resilience_lowers_the_resolve_ceiling():
     c = combat()
     total = c.spend_resilience("Ансельм")
     assert total["success"]
@@ -106,7 +106,7 @@ def тест_трата_стойкости_роняет_потолок_реши�
     assert rp["resolve"] == 0, "Решимость осталась выше обнулённого потолка"
 
 
-def тест_больше_чем_есть_не_потратить():
+def test_cannot_spend_more_than_held():
     c = combat()
     # Решимость на старте пуста, поэтому сначала её надо заслужить.
     c.award_resolve("Ханна", 1)
@@ -118,7 +118,7 @@ def тест_больше_чем_есть_не_потратить():
     assert c.resources("Ханна")["resolve"] == 0
 
 
-def тест_решимость_не_поднимается_выше_потолка():
+def test_resolve_never_rises_above_its_ceiling():
     c = combat()
     first = c.award_resolve("Лизель", 5)
     assert first["added"] == 1, "начислено больше, чем помещается в потолок"
@@ -128,7 +128,7 @@ def тест_решимость_не_поднимается_выше_потол�
     assert not full["success"] and full["added"] == 0, "начислили сверх потолка"
 
 
-def тест_решимость_снимает_на_круг_всё():
+def test_resolve_clears_everything_for_one_round():
     """Страх, боль, раны, штрафы — на круг не держит ничто.
 
     Раньше Решимость умела убирать только «сломлен» и «оглушён», и в третьем
@@ -151,7 +151,7 @@ def тест_решимость_снимает_на_круг_всё():
     assert c._penalty_conditions(combatant) == with_penalty, "иммунитет не погас через круг"
 
 
-def тест_решимость_тратится_даже_когда_снимать_нечего():
+def test_resolve_is_spent_even_with_nothing_to_clear():
     """Трата не должна пропадать впустую — это и был баг третьего прогона."""
     c = combat()
     assert not c.sheet("Ансельм").conditions
@@ -162,7 +162,7 @@ def тест_решимость_тратится_даже_когда_снима�
     assert c.sheet("Ансельм").immunity_rounds == 1
 
 
-def тест_заявка_распознаётся_в_любом_падеже():
+def test_claim_is_recognised_in_any_case_form():
     assert spends("ТРАЧУ УДАЧУ и бью снова") == ["fortune"]
     assert spends("Трачу Решимость, стискиваю зубы") == ["resolve"]
     assert spends("трачу стойкость — иначе конец") == ["resilience"]
@@ -170,7 +170,7 @@ def тест_заявка_распознаётся_в_любом_падеже():
     assert spends("Трачу удачу. Трачу решимость. Трачу удачу.") == ["fortune", "resolve"]
 
 
-def тест_разговор_про_удачу_не_заявка():
+def test_talking_about_fortune_is_not_a_claim():
     """Иначе любое «повезло» спишет ресурс, которого игрок не тратил."""
     for text in (
         "Курту сегодня не хватает удачи",
@@ -180,7 +180,7 @@ def тест_разговор_про_удачу_не_заявка():
         assert spends(text) == [], text
 
 
-def тест_тег_решимости_от_мастера():
+def test_resolve_tag_from_the_gm():
     entries = awards_resolve(
         "Сцена. [РЕШИМОСТЬ: Ханна, +1, вступилась за Йорга против патруля] Дальше.",
         NAMES)
@@ -190,7 +190,7 @@ def тест_тег_решимости_от_мастера():
     assert "Йорг" in entries[0]["reason"]
 
 
-def тест_выбранное_число_читается_из_заявки():
+def test_chosen_number_is_read_from_the_claim():
     assert chosen_value("ТРАЧУ СУДЬБУ, беру 01 — рука не дрогнет.") == 1
     assert chosen_value("Трачу судьбу и выбираю 5") == 5
     # Не назвал — берём лучшее: он и так заплатил постоянным ресурсом.
@@ -200,7 +200,7 @@ def тест_выбранное_число_читается_из_заявки():
     assert chosen_value("Трачу судьбу, беру 200") == 1
 
 
-def тест_порча_языка_ловит_подменённые_буквы():
+def test_language_corruption_catches_substituted_letters():
     """Латинская буква внутри русского слова — глазом не видно, а это порча."""
     clean = corruption_language("Ханна кивает и уходит в погреб.")
     assert not clean["corrupted"], clean
@@ -218,12 +218,12 @@ def тест_порча_языка_ловит_подменённые_буквы(
         assert not corruption_language(harmless)["corrupted"], harmless
 
 
-def тест_сержанту_дали_судьбу():
+def test_the_sergeant_was_given_fate():
     """Бриф: чтобы он мог пережить то, чего не должен был."""
     assert CONFIG["npcs"]["Сержант"]["fate"] == 1
 
 
-def тест_у_каждого_игрока_есть_мотивация():
+def test_every_player_has_a_motivation():
     """На ней держится возврат Решимости — без неё начислять не за что."""
     c = combat()
     for name in NAMES:
@@ -233,7 +233,7 @@ def тест_у_каждого_игрока_есть_мотивация():
 if __name__ == "__main__":
     failures = 0
     for name, func in sorted(globals().items()):
-        if name.startswith("тест_"):
+        if name.startswith("test_"):
             try:
                 func()
                 print(f"  ok   {name}")

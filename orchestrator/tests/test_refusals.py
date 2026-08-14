@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 from src.providers.refusals import recognise  # noqa: E402
 
 
-def тест_сигнал_api_верят_без_оговорок():
+def test_api_signal_is_trusted_outright():
     refusal = recognise("", signal="content_filter")
     assert refusal is not None and refusal.confident
     assert "OpenAI" in refusal.reason
@@ -25,7 +25,7 @@ def тест_сигнал_api_верят_без_оговорок():
     assert refusal is not None and refusal.confident
 
 
-def тест_разрыв_рамки_это_отказ():
+def test_breaking_the_frame_is_a_refusal():
     for text in (
         "Как языковая модель, я не могу отыгрывать сцену с насилием над ребёнком.",
         "Извините, но мои инструкции не позволяют мне продолжать эту сцену.",
@@ -37,7 +37,7 @@ def тест_разрыв_рамки_это_отказ():
         assert refusal.confident, f"занижена уверенность: {text}"
 
 
-def тест_отыгрыш_не_отказ():
+def test_roleplay_is_not_a_refusal():
     """Персонаж отказывается действовать — это ход, а не отказ модели."""
     for text in (
         "Курт мотает головой: «Я туда не полезу, там под полом что-то живое».",
@@ -49,14 +49,14 @@ def тест_отыгрыш_не_отказ():
         assert recognise(text) is None, f"ложная тревога: {text}"
 
 
-def тест_мета_отказ_без_рамки_только_подозрение():
+def test_meta_without_broken_frame_is_only_suspicion():
     """Отказ от сцены без упоминания модели — под вопросом, решают глаза."""
     refusal = recognise("Я не могу продолжать описывать эту сцену.")
     assert refusal is not None
     assert refusal.confidence == "подозрение"
 
 
-def тест_отказ_на_чужом_языке_это_отказ():
+def test_refusal_in_a_foreign_language_is_a_refusal():
     """Русский персонаж не говорит «I cannot continue» — это отписка вендора."""
     refusal = recognise(
         "I'm sorry, but I cannot continue this scene. It depicts harm to "
@@ -65,7 +65,7 @@ def тест_отказ_на_чужом_языке_это_отказ():
     assert refusal is not None and refusal.confident, refusal
 
 
-def тест_ход_на_чужом_языке_не_отказ():
+def test_turn_in_a_foreign_language_is_not_a_refusal():
     """Настоящий случай: Grok, круг 24 третьего прогона.
 
     Модель написала нормальный ход по роли, но по-английски. Прежнее правило
@@ -81,13 +81,13 @@ def тест_ход_на_чужом_языке_не_отказ():
     assert not refusal.confident, "ход не должен глушиться из-за языка"
 
 
-def тест_пустой_ответ_не_отказ():
+def test_empty_reply_is_not_a_refusal():
     """Пустой ответ — своя история: он повторяется, а отказ нет."""
     assert recognise("") is None
     assert recognise("   \n ") is None
 
 
-def тест_цитата_обрезана_и_однострочна():
+def test_quote_is_trimmed_to_one_line():
     refusal = recognise("Как ИИ,\nя не могу\nэто отыгрывать. " + "а" * 500)
     assert refusal is not None
     assert "\n" not in refusal.quote
@@ -97,7 +97,7 @@ def тест_цитата_обрезана_и_однострочна():
 if __name__ == "__main__":
     failures = 0
     for name, func in sorted(globals().items()):
-        if name.startswith("тест_"):
+        if name.startswith("test_"):
             try:
                 func()
                 print(f"  ok   {name}")

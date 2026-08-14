@@ -1,11 +1,11 @@
 # Глоссарий перехода на латиницу
 
-Рабочий документ рефакторинга. Договорённость об именах принимается **до**
-переименований: слепой перенос слепляет разные понятия, и это видно ниже в
-разделе «Ловушки».
+Переход сделан. Документ остаётся справочником: русская игровая терминология
+слева, имена в коде справа, и правило границы между ними.
 
-После рефакторинга остаётся справочником: русская игровая терминология слева,
-имена в коде справа.
+Писался он до переименований — договориться об именах надо было заранее, иначе
+слепой перенос слепляет разные понятия (см. «Ловушки»). Ниже он приведён к тому,
+что вышло на самом деле.
 
 ## Правило границы
 
@@ -26,13 +26,13 @@
 
 | Русское | Разводится на | Где |
 |---|---|---|
-| `Проверка` / `проверить` | `SkillCheck` — испытание навыка WFRP<br>`validate` / `check` — проверка в коде | `parse.py` vs `проверка.py` |
+| `Проверка` / `проверить` | `SkillCheck` — испытание навыка WFRP<br>`validate` / `check` — проверка в коде | `parse.py` vs `preflight.py` |
 | `Состояние` / `состояния` | `ResumeState` — состояние для продолжения прогона<br>`conditions` — состояния бойца по WFRP | `restore.py` vs `combat.py` |
 | `итог` (311 вхождений) | `summary` — итоговое событие, сводка<br>`total` — сумма чисел | везде |
 | `цель` | `target_number` — целевое число броска<br>`target` — цель атаки, боец | `dice.py` vs `combat.py` |
 | `имя` (536 вхождений) | `name` по умолчанию<br>`character` / `provider` / `filename` там, где ясно что именно | везде |
 | `Результат` | `AttackResult` — слишком общее само по себе | `combat.py` |
-| `деньги` / `стоимость` | оба → `cost`, свести к одному | `общий.py`, `base.py` |
+| `деньги` / `стоимость` | оба → `cost`, свести к одному | `common.py`, `base.py` |
 
 Сокращения: `уу` (уровни успеха) → `sl` (success levels, термин WFRP);
 `дубль` → `doubles` (дубль на кубах по WFRP).
@@ -50,35 +50,35 @@
 | `КубикиПоСписку` | `ScriptedDice` | `test_combat.py` |
 | `ОстановкаПрогона` | `RunStopped` | `session.py` |
 | `Ответ` | `Reply` | `base.py` |
-| `Отказ` | `Refusal` | `отказы.py` |
-| `ОтчётОКлючах` | `KeyReport` | `настройки.py` |
-| `ОшибкаПровайдера` | `ProviderError` | `общий.py` |
+| `Отказ` | `Refusal` | `refusals.py` |
+| `ОтчётОКлючах` | `KeyReport` | `settings.py` |
+| `ОшибкаПровайдера` | `ProviderError` | `common.py` |
 | `ОшибкаПромптов` | `PromptError` | `prompts.py` |
-| `Параметры` | `GenerationParams` | `настройки.py` |
+| `Параметры` | `GenerationParams` | `settings.py` |
 | `ПодложнаяСессия` | `FakeSession` | `test_openrouter.py` |
 | `Провайдер` | `Provider` | `base.py` |
 | `ПровайдерClaude` | `ClaudeProvider` | `claude.py` |
 | `ПровайдерGemini` | `GeminiProvider` | `gemini.py` |
-| `ПровайдерHTTP` | `HttpProvider` | `общий.py` |
+| `ПровайдерHTTP` | `HttpProvider` | `common.py` |
 | `ПровайдерOpenAI` | `OpenAIProvider` | `openai.py` |
 | `ПровайдерOpenRouter` | `OpenRouterProvider` | `openrouter.py` |
 | `ПровайдерXAI` | `XAIProvider` | `xai.py` |
 | `ПровайдерЗаглушка` | `StubProvider` | `stub.py` |
-| `ПровайдерОтказчик` | `RefusingProvider` | `test_отказ_в_прогоне.py` |
-| `ПровайдерЧата` | `ChatProvider` | `чат.py` |
+| `ПровайдерОтказчик` | `RefusingProvider` | `test_refusal_in_run.py` |
+| `ПровайдерЧата` | `ChatProvider` | `chat.py` |
 | `Проверка` | `SkillCheck` | `parse.py` |
 | `Прогон` | `Run` | `session.py` |
 | `Промпты` | `Prompts` | `prompts.py` |
-| `Разбор` | `ParsedResponse` | `общий.py` |
-| `Расход` | `Usage` | `общий.py` |
+| `Разбор` | `ParsedResponse` | `common.py` |
+| `Расход` | `Usage` | `common.py` |
 | `Результат` | `AttackResult` | `combat.py` |
 | `Сессия` | `Session` | `base.py` |
 | `СессияClaude` | `ClaudeSession` | `claude.py` |
-| `СессияHTTP` | `HttpSession` | `общий.py` |
+| `СессияHTTP` | `HttpSession` | `common.py` |
 | `СессияЗаглушка` | `StubSession` | `stub.py` |
-| `СессияОтказчик` | `RefusingSession` | `test_отказ_в_прогоне.py` |
+| `СессияОтказчик` | `RefusingSession` | `test_refusal_in_run.py` |
 | `Состояние` | `ResumeState` | `restore.py` |
-| `Токены` | `Tokens` | `общий.py` |
+| `Токены` | `Tokens` | `common.py` |
 | `Ход` | `Turn` | `session.py` |
 
 Порядок слов переворачивается: `ПровайдерClaude` → `ClaudeProvider`.
@@ -119,7 +119,7 @@
 | `раны_макс` | `wounds_max` |
 | `раны` | `wounds` |
 | `броня` | `armour` |
-| `оружие` | `weapon` |
+| `оружие` | `weapons` |
 | `состояния` | `conditions` |
 | `травмы` | `injuries` |
 | `криты_по_локациям` | `crits_by_location` |
@@ -142,7 +142,7 @@
 |---|---|
 | `атакующий` | `attacker` |
 | `цель` | `target` |
-| `оружие` | `weapon` |
+| `оружие` | `weapons` |
 | `бросок_атаки` | `attack_roll` |
 | `цель_атаки` | `attack_target` |
 | `уу_атаки` | `attack_sl` |
@@ -214,7 +214,7 @@
 | Класс | Было | Стало |
 |---|---|---|
 | `SkillCheck` | `персонаж`, `навык`, `сложность`, `строка`, `метки`, `база` | `character`, `skill`, `difficulty`, `line`, `tags`, `base` |
-| `Attack` | `кто`, `по_кому`, `чем`, `защита`, `строка`, `метки` | `attacker`, `target`, `weapon`, `defence`, `line`, `tags` |
+| `Attack` | `кто`, `по_кому`, `чем`, `защита`, `строка`, `метки` | `who`, `target_name`, `weapon`, `defence`, `line`, `tags` |
 | `Refusal` | `уверенность`, `причина`, `цитата` | `confidence`, `reason`, `quote` |
 | `ResumeState` | `последний_круг`, `режим`, `разговорных_кругов`, `выданные_числа`, `бросков`, `источник` | `last_round`, `mode`, `talk_rounds`, `issued_numbers`, `rolls`, `source` |
 | `GenerationParams` | `температура`, `предел_ответа`, `размышление`, `таймаут_с`, `попыток`, `пауза_с`, `предел_паузы_с` | `temperature`, `max_output`, `reasoning`, `timeout_s`, `attempts`, `pause_s`, `max_pause_s` |
@@ -289,7 +289,7 @@
 | Было | Стало |
 |---|---|
 | `orchestrator/src/providers/настройки.py` | `settings.py` |
-| `orchestrator/src/providers/общий.py` | `http.py` |
+| `orchestrator/src/providers/общий.py` | `common.py` |
 | `orchestrator/src/providers/отказы.py` | `refusals.py` |
 | `orchestrator/src/providers/чат.py` | `chat.py` |
 | `orchestrator/проверка.py` | `preflight.py` |
@@ -313,3 +313,67 @@
 | `--указание` | `--note` |
 
 Остальные флаги уже латиницей.
+
+## Два модуля протокола
+
+Кириллица, оставшаяся в коде, собрана в двух местах, и оба помечены изнутри.
+
+`orchestrator/src/protocol.py` — разговор с игроками и мастером: имя мастера,
+режимы, теги `[РЕЖИМ: …]`, `[ФИНАЛ]`, `[ВЫБЫЛ]`, `[ВЕРНУЛСЯ]`, `[РЕШИМОСТЬ: …]`,
+ключевые слова строк `ПРОВЕРКА` и `АТАКА`, заголовок личного блока, пометка
+тайного хода, основы названий ресурсов.
+
+`scoring/rubric_schema.py` — разговор с судьёй: ключи ответа, которые диктует
+`rubric.md`, контракт на раскрытие тайн и колонки `оценка.csv`.
+
+Второй модуль появился не по плану. Оказалось, что ключ `круг` есть и в логе, и
+в ответе судьи: в логе он давно `round`, в ответе судьи обязан остаться русским,
+**и по строке их не различить**. Различает теперь то, из какого модуля взята
+константа, а не то, как она пишется.
+
+## Ресурс: три имени одного
+
+Показательный случай границы. Ресурс существует в трёх видах, и все три нужны:
+
+| Где | Как выглядит | Почему так |
+|---|---|---|
+| В реплике игрока | «ТРАЧУ УДАЧУ», «трачу удачи» | как модель это пишет; ловится по основе `удач` |
+| В коде и в логе | `fortune` | имя поля `Combatant`, ключ в `лог.jsonl` |
+| В отчёте и репликах мастеру | «Удача» | это читают люди |
+
+Переводит первое во второе `protocol.RESOURCE_STEMS`, второе в третье —
+`protocol.RESOURCE_NAMES` и `rubric_schema.RESOURCE_NAMES`. Без последнего
+мастер получал бы «resolve кончилась», и это ровно то, что случилось на первом
+заходе.
+
+## Имена тестов
+
+Переведены руками, все 113. По словарю они собирались в нечитаемое: имя теста —
+это утверждение о системе связным текстом, а не составное существительное.
+`тест_решимость_снимает_на_круг_всё` стало
+`test_resolve_clears_everything_for_one_round`, а не
+`test_resolve_removes_on_round_everything`.
+
+Префикс сменился с `тест_` на `test_`, так что pytest их найдёт. Сам pytest в
+проект не добавлен: каждый тестовый файл по-прежнему сам себе раннер и
+зависимостей не требует.
+
+## Чего в коде больше нет
+
+Проверяется одной командой — токенизатором, а не глазами:
+
+```bash
+python3 - <<'EOF'
+import io, re, tokenize, pathlib
+for d in ('orchestrator', 'scoring', 'scripts'):
+    for p in pathlib.Path(d).rglob('*.py'):
+        if '__pycache__' in str(p):
+            continue
+        for t in tokenize.generate_tokens(io.StringIO(
+                p.read_text(encoding='utf-8')).readline):
+            if t.type == tokenize.NAME and re.search(r'[А-Яа-яЁё]', t.string):
+                print(f'{p}:{t.start[0]}: {t.string}')
+EOF
+```
+
+Сейчас она не выводит ничего.
