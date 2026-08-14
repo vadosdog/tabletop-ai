@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Что каждый провайдер на самом деле принимает, и ловится ли отказ.
 
-    python3 orchestrator/проверка.py --provider openai
-    python3 orchestrator/проверка.py --provider openai --отказ
-    python3 orchestrator/проверка.py --all
+    python3 orchestrator/preflight.py --provider openai
+    python3 orchestrator/preflight.py --provider openai --refusal
+    python3 orchestrator/preflight.py --all
 
 Документация вендоров про температуру у рассуждающих моделей молчит, а в блок
 параметров отчёта нельзя писать «вроде бы задаётся». Поэтому здесь каждый
@@ -156,7 +156,7 @@ def main() -> int:
     parsed.add_argument("--provider", default=None)
     parsed.add_argument("--model", default=None)
     parsed.add_argument("--all", action="store_true", help="все вендоры из конфига")
-    parsed.add_argument("--отказ", action="store_true",
+    parsed.add_argument("--refusal", action="store_true",
                         help="послать заведомо отказный запрос и проверить ловлю")
     args = parsed.parse_args()
     if not args.provider and not args.all:

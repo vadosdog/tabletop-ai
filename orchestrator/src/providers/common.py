@@ -132,7 +132,7 @@ class ProviderError(RuntimeError):
 class HttpSession:
     """Один агент. Историю держит адаптер: так она видна и попадает в лог."""
 
-    def __init__(self, provider: "ПровайдерHTTP", agent: str,
+    def __init__(self, provider: "HttpProvider", agent: str,
                  system_prompt: str, model: str):
         self.agent = agent
         self.model = model
@@ -192,7 +192,7 @@ class HttpProvider:
     def _url(self) -> str:
         raise NotImplementedError
 
-    def _headings(self, session: "СессияHTTP") -> dict[str, str]:
+    def _headings(self, session: "HttpSession") -> dict[str, str]:
         raise NotImplementedError
 
     def _body(self, session: HttpSession) -> dict:
@@ -211,7 +211,7 @@ class HttpProvider:
     async def shutdown(self) -> None:
         await self._client.aclose()
 
-    def what_given(self, session: "СессияHTTP | None" = None) -> dict:
+    def what_given(self, session: "HttpSession | None" = None) -> dict:
         """Что действительно ушло в запрос, а не что мы собирались послать.
 
         Читается из готового тела, поэтому снятый на ходу параметр здесь честно

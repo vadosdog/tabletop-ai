@@ -73,7 +73,7 @@ def test_generation_params_reach_upstream():
     assert body["temperature"] == 1.0
     # Лимит поднят до 16000: размышление Qwen растёт вместе с контекстом.
     assert body["max_tokens"] == 16000
-    # У прослойки размышление объектом, а не строкой: строковое поле из чат.py
+    # У прослойки размышление объектом, а не строкой: строковое поле из chat.py
     # должно быть снято, иначе уйдут оба и апстрим ответит ошибкой.
     assert body["reasoning"] == {"effort": "low"}, body.get("reasoning")
     assert "reasoning_effort" not in body

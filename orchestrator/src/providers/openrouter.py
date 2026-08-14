@@ -40,7 +40,7 @@ class OpenRouterProvider(ChatProvider):
     base_url = "https://openrouter.ai/api/v1/chat/completions"
 
     # У OpenRouter уровень размышления передаётся объектом, а не строкой,
-    # поэтому поле из чат.py не используется — тело собирается ниже.
+    # поэтому поле из chat.py не используется — тело собирается ниже.
     field_reasoning = "reasoning"
 
     def __init__(self, *arguments, upstreams: list[str] | None = None,
@@ -81,7 +81,7 @@ class OpenRouterProvider(ChatProvider):
 
     def _body(self, session: HttpSession) -> dict:
         body = super()._body(session)
-        # Строковый reasoning_effort из чат.py прослойке не годится — у неё
+        # Строковый reasoning_effort из chat.py прослойке не годится — у неё
         # объект. Снимаем его и ставим свой.
         body.pop("reasoning_effort", None)
 
